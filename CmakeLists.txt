@@ -1,0 +1,37 @@
+cmake_minimum_required(VERSION 3.13)
+
+
+set(CMAKE_TOOLCHAIN_FILE "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
+
+
+project(main1)
+
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # Static linking
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(GDSTK_PYTHON OFF CACHE BOOL "" FORCE) # Disable Python bindings for gdstk
+add_subdirectory("thirdParty/gdstk")
+
+
+# we define MY_SOURCES to be a list of all the source files for my project
+file(GLOB_RECURSE MY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+
+add_executable(main1 "${MY_SOURCES}")
+
+
+target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/resources/") # This is useful to get an ASSETS_PATH in your IDE during development but you should comment this if you compile a release version and uncomment the next line
+
+#target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCES_PATH="./resources/") # Uncomment this line to setup the ASSETS_PATH macro to the final assets directory when you share the project
+
+
+target_include_directories(main1 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
+target_link_libraries(main1 PRIVATE gdstk)
+
