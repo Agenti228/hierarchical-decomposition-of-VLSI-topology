@@ -5,7 +5,7 @@ set(CMAKE_TOOLCHAIN_FILE "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE
 set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
 
 
-project(main1)
+project(vlsi_topology)
 
 
 set(CMAKE_CXX_STANDARD 17)
@@ -24,14 +24,15 @@ add_subdirectory("thirdParty/gdstk")
 file(GLOB_RECURSE MY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
 
-add_executable(main1 "${MY_SOURCES}")
+add_executable(vlsi_topology "${MY_SOURCES}")
 
+target_compile_options(vlsi_topology PRIVATE /utf-8)
 
 target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCES_PATH="${CMAKE_CURRENT_SOURCE_DIR}/resources/") # This is useful to get an ASSETS_PATH in your IDE during development but you should comment this if you compile a release version and uncomment the next line
 
 #target_compile_definitions("${CMAKE_PROJECT_NAME}" PUBLIC RESOURCES_PATH="./resources/") # Uncomment this line to setup the ASSETS_PATH macro to the final assets directory when you share the project
 
 
-target_include_directories(main1 PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
-target_link_libraries(main1 PRIVATE gdstk)
+target_include_directories(vlsi_topology PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
+target_link_libraries(vlsi_topology PRIVATE gdstk)
 

@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Debug/vlsi_topology.exe",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/Debug",
+            "preLaunchTask": "cmake build"
+        },
+        {
+            "name": "Run",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/Release/vlsi_topology.exe",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/Release",
+            "preLaunchTask": "cmake build release"
+        }
+    ]
+}

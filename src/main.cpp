@@ -9,306 +9,416 @@
 
 #include <gdstk/gdstk.hpp>
 
-using namespace std;
+using gdstk::Vec2;
+using std::cerr;
+using std::cout;
+using std::endl;
+using std::string;
+using std::unordered_map;
+using std::vector;
 
 namespace fs = std::filesystem;
 
-struct Shape
+template <typename T>
+static void hash_combine(uint64_t &seed, const T &value)
 {
-    int layer = 0;
+    std::hash<T> hasher;
 
-    vector<gdstk::Vec2> points;
-
-    double min_x = 0;
-    double min_y = 0;
-
-    double max_x = 0;
-    double max_y = 0;
-};
-
-struct ShapeInstance
-{
-    int template_id = 0;
-
-    double x;
-    double y;
-};
-
-struct PatternElement
-{
-    int template_id = 0;
-
-    double dx;
-    double dy;
-
-    bool operator<(const PatternElement &other) const
-    {
-        if (dx != other.dx)
-        {
-            return dx < other.dx;
-        }
-
-        if (dy != other.dy)
-        {
-            return dy < other.dy;
-        }
-
-        return template_id < other.template_id;
-    }
-};
-
-struct Pattern
-{
-    int id = 0;
-
-    vector<PatternElement> elements;
-
-    vector<gdstk::Vec2> placements;
-};
-
-static void compute_bbox(Shape &shape)
-{
-    shape.min_x = shape.max_x = shape.points[0].x;
-    shape.min_y = shape.max_y = shape.points[0].y;
-
-    for (auto &point : shape.points)
-    {
-        shape.min_x = min(shape.min_x, point.x);
-        shape.min_y = min(shape.min_y, point.y);
-
-        shape.max_x = max(shape.max_x, point.x);
-        shape.max_y = max(shape.max_y, point.y);
-    }
+    seed ^= hasher(value) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
 }
 
-static string build_canonical_shape(const Shape &shape)
+// возвращает начальную точку у примитива, для того, чтобы избежать их дупликации в Registry. берет, исходя из лексикографического упроядочивания, реализованного в gdstk::Vec2
+template <typename T>
+static int get_minimal_point_idx(const T &non_canonical_points)
 {
-    vector<gdstk::Vec2> points = shape.points;
-
-    int count = static_cast<int>(points.size());
-
     int start_index = 0;
+    int points_count = static_cast<int>(non_canonical_points.count);
 
-    for (int i = 1; i < count; ++i)
+    for (int i = 1; i < points_count; ++i)
     {
-        if (points[i] < points[start_index])
+        if (non_canonical_points[i] < non_canonical_points[start_index])
         {
             start_index = i;
         }
     }
 
-    vector<gdstk::Vec2> cw_points;
+    return start_index;
+}
 
-    for (int i = 0; i < count; ++i)
+// используем чтобы на первом этапе выбрать все уникальные полигоны (фигуры, примитивы). добавляем их в Registy, чтобы использовать для будущих рассчетов. это основная структура, в которой храниться вся информация для восстановления форм объектов
+struct ShapeTemplate
+{
+    uint64_t canonical_hash = 0;
+
+    int layer_id = 0;
+
+    vector<Vec2> canonical_points;
+
+    ShapeTemplate()
     {
-        cw_points.push_back(points[(static_cast<std::vector<gdstk::Vec2, std::allocator<gdstk::Vec2>>::size_type>(start_index) + i) % count]);
     }
 
-    vector<gdstk::Vec2> ccw_points;
-
-    for (int i = 0; i < count; ++i)
+    ShapeTemplate(const gdstk::Array<gdstk::Vec2> non_canonical_points, const int layer)
     {
-        int index =
-            (start_index - i + count) % count;
+        layer_id = layer;
 
-        ccw_points.push_back(points[index]);
-    }
+        int points_count = static_cast<int>(non_canonical_points.count);
+        int start_index = get_minimal_point_idx(non_canonical_points);
 
-    auto build_string = [&](const vector<gdstk::Vec2> &polygon)
-    {
-        stringstream ss;
-
-        ss << "L" << shape.layer << "|";
-
-        gdstk::Vec2 anchor = polygon[0];
-
-        ss << "0,0;";
-
-        for (int i = 1; i < polygon.size(); ++i)
+        for (int i = 0; i < points_count; ++i)
         {
-            double dx = polygon[i].x - anchor.x;
-            double dy = polygon[i].y - anchor.y;
-
-            ss << dx << "," << dy << ";";
+            int current_point_index = ((start_index) + i) % points_count;
+            gdstk::Vec2 canonized_point = non_canonical_points[current_point_index] - non_canonical_points[start_index];
+            canonical_points.push_back(canonized_point);
         }
-
-        return ss.str();
-    };
-
-    string cw_string = build_string(cw_points);
-    string ccw_string = build_string(ccw_points);
-
-    return min(cw_string, ccw_string);
-}
-
-static string build_pattern_key(vector<PatternElement> elements)
-{
-    sort(elements.begin(), elements.end());
-
-    stringstream ss;
-
-    for (auto &element : elements)
-    {
-        ss
-            << element.template_id
-            << ":"
-            << element.dx
-            << ":"
-            << element.dy
-            << ";";
     }
+};
 
-    return ss.str();
-}
-
-static bool inside_window(const Shape &shape, double x, double y, double width, double height)
+// использем чтобы хранить всевозможные инстансы (position_on_canvas в абсолютных координатах) паттернов, которые встречаются файле. на первом шаге, после прочтения файла, если использовать вместе с ShapeTemplate, то можно будет восставносить файл, без лишних обращений к Pattern. на последующих этапах мы будем объединять паттерны (что соотносится с pattern_id), а следовательно и Shape (GDSContext.shapes будет уменьшаться в размере)
+struct Shape
 {
-    return shape.min_x >= x &&
-           shape.min_y >= y &&
-           shape.max_x <= x + width &&
-           shape.max_y <= y + height;
-}
+    Vec2 position_on_canvas = {};
 
-static vector<Shape> read_gds(const string &filename)
+    int pattern_id = -1;
+
+    bool consumed = false; // временное решение, нужное для более легкого объедиенния нескольких фигур
+};
+
+// это та структура, которая отвечает за хранение паттернов из файла и их объединение. она состит из:
+// 1. pattern_templates - все примитивы, что попали в окрестность определенной точки (которую мы выбираем как вершину 1 полигона. эта точки измеряется в абсолютных координатах). pattern_templates, в свою очередь просто wrapper, который нужен для добаления информации примитивам (ShapeTemplate) о том, где они находятся внутри этого Pattern
+// 2. canonical_hash, который нужен для того, чтобы можно было быстро определить что это за Pattern. он вычисляется через относительные координаты примитивов (PatternTemplate, который, фактически, является ShapeTemplate), которые лежат внутри Pattern и всех их слоев
+// важное уточнение: сам Pattern не знает где он находится, лишь то, что он существует и какие примитивы хранит. хранение всех паттернов и их соответвие с Shape происходит в Registry
+struct Pattern
 {
-    struct LibraryGuard
+    // нужен для того, чтобы знать где находятся ShapeTemplate (примитивы) на Pattern, потому что Pattern может состоять из многих примитивов. объединять сами примитивы нельзя, потому что тогда потеряются данные о расположении полигонов (фигур) в файле. можно было бы хранить данные
+    struct PatternTemplate
     {
-        gdstk::Library &library;
+        Vec2 position_in_pattern = {};
 
-        ~LibraryGuard()
+        int shape_template_id = -1;
+
+        bool operator<(const PatternTemplate &other) const
         {
-            library.free_all();
+            if (position_in_pattern != other.position_in_pattern)
+            {
+                return position_in_pattern < other.position_in_pattern;
+            }
+
+            return shape_template_id < other.shape_template_id;
         }
     };
 
-    if (!fs::exists(filename))
-    {
-        cerr << "File does not exist: " << filename << endl;
+    uint64_t canonical_hash = 0;
 
-        return {};
+    vector<PatternTemplate> pattern_templates;
+};
+
+// позволяет хранить структуры, такие как ShapeTemplate и Pattern. доступ и сравнение происходит по хешу, который храниться в переменной canonical_hash, которая есть у обеих структур. реализованы методы:
+// 1. get_or_insert, которая принимает:
+//      key: uint64_t - это хеш примитива (паттерна)
+//      object: T - добавляемый примитив (паттерн)
+// если в canonical_key_to_template_id_map уже есть примитив (паттерн), который ма хотим добвить, то метод вернет индекс этого паттерна, который храниться в unique_templates. если же такого объекта нет, то он добавит его в canonical_key_to_template_id_map и в конец unique_templates, после чего вернет индекс (размер unique_templates)
+// 2. operator[] - позволяет прочитать данные в unique_templates, без возможности их изменить
+// 3. size - возвращает количество добаленных (следовательно уникальных) примитивов (паттернов)
+// 4. contains, принимает на вход key: uint64_t, и проверяет по нему, есть ли примитив (паттерн) с таким хешем (у этих объектов он храниться в переменной canonical_hash) в canonical_key_to_template_id_map, то есть и в unique_templates
+template <typename T>
+struct Registry
+{
+    unordered_map<uint64_t, int> canonical_key_to_template_id_map;
+
+    vector<T> unique_templates;
+
+    int get_or_insert(const uint64_t &key, const T &object)
+    {
+        auto it = canonical_key_to_template_id_map.find(key);
+
+        if (it != canonical_key_to_template_id_map.end())
+        {
+            return it->second;
+        }
+
+        int id = static_cast<int>(unique_templates.size());
+
+        canonical_key_to_template_id_map[key] = id;
+
+        unique_templates.push_back(object);
+
+        return id;
     }
 
-    gdstk::ErrorCode error_code = gdstk::ErrorCode::NoError;
-
-    gdstk::Library library = gdstk::read_gds(filename.c_str(), 1e-6, 1e-9, nullptr, &error_code);
-    LibraryGuard guard{library};
-
-    if (error_code != gdstk::ErrorCode::NoError)
+    const T &operator[](int index) const
     {
-        cerr << "Failed to read GDS file: " << filename << endl;
-        cerr << "Error code: " << static_cast<int>(error_code) << endl;
-
-        return {};
+        return unique_templates[index];
     }
 
+    int size() const
+    {
+        return static_cast<int>(unique_templates.size());
+    }
+
+    bool contains(const uint64_t &key) const
+    {
+        return canonical_key_to_template_id_map.count(key) > 0;
+    }
+};
+
+// структура-wrapper для всех контейнеров. она нужна для более легкой передачи данных между фукнциями
+struct GDSContext
+{
+    Registry<ShapeTemplate> shape_template_registry;
+    Registry<Pattern> pattern_registry;
     vector<Shape> shapes;
+};
 
-    for (size_t i = 0; i < library.cell_array.count; ++i)
+static uint64_t calculate_pattern_hash(const Pattern &pattern)
+{
+    uint64_t hash = 0;
+
+    for (const Pattern::PatternTemplate &element : pattern.pattern_templates)
     {
-        const gdstk::Cell *cell = library.cell_array[i];
+        hash_combine(hash, element.position_in_pattern.x);
+        hash_combine(hash, element.position_in_pattern.y);
+        hash_combine(hash, element.shape_template_id);
+    }
 
-        if (cell == nullptr)
+    return hash;
+}
+
+static bool is_inside_window(const Vec2 &origin, const Vec2 &point, double width, double height)
+{
+    double dx = point.x - origin.x;
+    double dy = point.y - origin.y;
+
+    if (dx < 0.0 || dy < 0.0)
+    {
+        return false;
+    }
+
+    if (dx > width || dy > height)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+static Pattern build_local_pattern(const GDSContext &gds, const Shape &anchor_shape, double width, double height)
+{
+    Pattern pattern;
+
+    for (const Shape &candidate_shape : gds.shapes)
+    {
+        if (candidate_shape.consumed)
         {
             continue;
         }
 
-        for (size_t j = 0; j < cell->polygon_array.count; ++j)
+        if (!is_inside_window(anchor_shape.position_on_canvas, candidate_shape.position_on_canvas, width, height))
         {
-            const gdstk::Polygon *polygon = cell->polygon_array[j];
-
-            if (polygon == nullptr)
-            {
-                continue;
-            }
-
-            if (polygon->point_array.count == 0)
-            {
-                continue;
-            }
-
-            Shape shape;
-            shape.points.reserve(polygon->point_array.count);
-
-            shape.layer = gdstk::get_layer(polygon->tag);
-
-            for (size_t k = 0; k < polygon->point_array.count; ++k)
-            {
-                const gdstk::Vec2 &point = polygon->point_array[k];
-
-                shape.points.emplace_back(point);
-            }
-
-            compute_bbox(shape);
-
-            shapes.push_back(shape);
+            continue;
         }
+
+        Pattern::PatternTemplate element;
+
+        element.position_in_pattern = candidate_shape.position_on_canvas - anchor_shape.position_on_canvas;
+
+        element.shape_template_id = candidate_shape.pattern_id;
+
+        pattern.pattern_templates.push_back(element);
     }
 
-    return shapes;
+    sort(pattern.pattern_templates.begin(), pattern.pattern_templates.end());
+
+    pattern.canonical_hash = calculate_pattern_hash(pattern);
+
+    return pattern;
 }
 
-void write_pattern_gds(const Pattern &pattern, const vector<Shape> &template_shapes)
+static unordered_map<uint64_t, vector<int>> find_pattern_candidates(const GDSContext &gds, double width, double height)
 {
-    string filename = "pattern" + to_string(pattern.id) + ".gds";
+    unordered_map<uint64_t, vector<int>> pattern_candidates;
 
-    gdstk::Library library = {};
-
-    library.init("PATTERN_LIB", 1e-6, 1e-9);
-
-    string cell_name = "PATTERN_" + to_string(pattern.id);
-
-    gdstk::Cell *cell = (gdstk::Cell *)calloc(1, sizeof(gdstk::Cell));
-
-    cell->init(cell_name.c_str());
-
-    for (auto &element : pattern.elements)
+    for (int i = 0; i < static_cast<int>(gds.shapes.size()); ++i)
     {
-        const Shape &shape =
-            template_shapes[element.template_id];
+        const Shape &shape = gds.shapes[i];
 
-        gdstk::Polygon *polygon =
-            new gdstk::Polygon();
-
-        polygon->tag =
-            gdstk::make_tag(shape.layer, 0);
-
-        for (auto &point : shape.points)
+        if (shape.consumed)
         {
-            polygon->point_array.append({point.x + element.dx, point.y + element.dy});
+            continue;
         }
 
-        cell->polygon_array.append(polygon);
+        Pattern pattern = build_local_pattern(gds, shape, width, height);
+
+        pattern_candidates[pattern.canonical_hash].push_back(i);
     }
 
-    library.cell_array.append(cell);
-
-    library.write_gds(filename.c_str(), 0, nullptr);
-
-    library.free_all();
+    return pattern_candidates;
 }
 
-static void print_shapes(const vector<Shape> &shapes)
+static void register_patterns(GDSContext &gds, const unordered_map<uint64_t, vector<int>> &pattern_candidates, double width, double height)
+{
+    vector<Shape> new_shapes;
+
+    for (const auto &[hash, shape_indices] : pattern_candidates)
+    {
+        if (shape_indices.size() < 2)
+        {
+            continue;
+        }
+
+        const Shape &first_shape = gds.shapes[shape_indices[0]];
+
+        Pattern pattern = build_local_pattern(gds, first_shape, width, height);
+
+        int pattern_id = gds.pattern_registry.get_or_insert(hash, pattern);
+
+        for (int shape_index : shape_indices)
+        {
+            Shape &old_shape = gds.shapes[shape_index];
+
+            old_shape.consumed = true;
+
+            Shape new_shape;
+
+            new_shape.position_on_canvas = old_shape.position_on_canvas;
+
+            new_shape.pattern_id = pattern_id;
+
+            new_shapes.push_back(new_shape);
+        }
+    }
+
+    for (const Shape &shape : new_shapes)
+    {
+        gds.shapes.push_back(shape);
+    }
+}
+
+static void remove_consumed_shapes(GDSContext &gds)
+{
+    vector<Shape> alive_shapes;
+
+    for (const Shape &shape : gds.shapes)
+    {
+        if (!shape.consumed)
+        {
+            alive_shapes.push_back(shape);
+        }
+    }
+
+    gds.shapes = std::move(alive_shapes);
+}
+
+static bool extract_patterns_iteration(GDSContext &gds, double width, double height)
+{
+    int shapes_before = static_cast<int>(gds.shapes.size());
+
+    auto pattern_candidates = find_pattern_candidates(gds, width, height);
+
+    register_patterns(gds, pattern_candidates, width, height);
+
+    remove_consumed_shapes(gds);
+
+    int shapes_after = static_cast<int>(gds.shapes.size());
+
+    return shapes_after != shapes_before;
+}
+
+static void extract_patterns(GDSContext &gds, double width, double height)
+{
+    while (true)
+    {
+        bool changed = extract_patterns_iteration(gds, width, height);
+
+        if (!changed)
+        {
+            break;
+        }
+    }
+}
+
+// пока так, когда появиться чтение из файла, тогда заменим
+static void initialize_test_gds(GDSContext &gds)
+{
+    ShapeTemplate rectangle_template;
+
+    rectangle_template.layer_id = 1;
+
+    rectangle_template.canonical_points =
+        {
+            Vec2{0, 0},
+            Vec2{10, 0},
+            Vec2{10, 10},
+            Vec2{0, 10}};
+
+    rectangle_template.canonical_hash = 1111;
+
+    int rectangle_pattern_id = gds.shape_template_registry.get_or_insert(
+        rectangle_template.canonical_hash,
+        rectangle_template);
+
+    Shape shape_a;
+
+    shape_a.position_on_canvas = Vec2{100, 100};
+    shape_a.pattern_id = rectangle_pattern_id;
+
+    gds.shapes.push_back(shape_a);
+
+    Shape shape_b;
+
+    shape_b.position_on_canvas = Vec2{120, 100};
+    shape_b.pattern_id = rectangle_pattern_id;
+
+    gds.shapes.push_back(shape_b);
+
+    Shape shape_c;
+
+    shape_c.position_on_canvas = Vec2{300, 300};
+    shape_c.pattern_id = rectangle_pattern_id;
+
+    gds.shapes.push_back(shape_c);
+
+    Shape shape_d;
+
+    shape_d.position_on_canvas = Vec2{320, 300};
+    shape_d.pattern_id = rectangle_pattern_id;
+
+    gds.shapes.push_back(shape_d);
+
+    Shape noise_shape;
+
+    noise_shape.position_on_canvas = Vec2{1000, 1000};
+    noise_shape.pattern_id = rectangle_pattern_id;
+
+    gds.shapes.push_back(noise_shape);
+}
+
+static void print_shapes(const vector<Shape> &shapes, Registry<ShapeTemplate> &unique_templates)
 {
     cout << "Shapes count: " << shapes.size() << endl;
 
     for (size_t i = 0; i < shapes.size(); ++i)
     {
         const Shape &shape = shapes[i];
+        ShapeTemplate polygonTemplate = unique_templates[shape.pattern_id];
 
         cout << "Shape #" << i << endl;
-        cout << "Layer: " << shape.layer << endl;
+        cout << "Layer: " << polygonTemplate.layer_id << endl;
 
-        cout << "Bounding box:" << endl;
-        cout << "min_x = " << shape.min_x << endl;
-        cout << "min_y = " << shape.min_y << endl;
-        cout << "max_x = " << shape.max_x << endl;
-        cout << "max_y = " << shape.max_y << endl;
+        cout << "Template points:" << endl;
 
-        cout << "Points:" << endl;
-
-        for (size_t j = 0; j < shape.points.size(); ++j)
+        for (size_t j = 0; j < polygonTemplate.canonical_points.size(); ++j)
         {
-            const gdstk::Vec2 &point = shape.points[j];
+            const Vec2 &point = polygonTemplate.canonical_points[j];
+
+            cout << point.x << " " << point.y << endl;
+        }
+
+        cout << "Placement points:" << endl;
+
+        for (size_t j = 0; j < polygonTemplate.canonical_points.size(); ++j)
+        {
+            const gdstk::Vec2 &point = polygonTemplate.canonical_points[j] + shape.position_on_canvas;
 
             cout << point.x << " " << point.y << endl;
         }
@@ -319,182 +429,23 @@ static void print_shapes(const vector<Shape> &shapes)
 
 int main()
 {
-    const string resource_dir = RESOURCES_PATH;
+    GDSContext gds;
 
-    string filename = resource_dir + "66.gds";
+    initialize_test_gds(gds);
 
-    cout << filename << endl;
+    cout << "Before extraction:" << endl;
 
-    vector<Shape> shapes = read_gds(filename);
+    print_shapes(gds.shapes, gds.shape_template_registry);
 
-    print_shapes(shapes);
+    double width = 40.0;
+    double height = 40.0;
 
-    return 0;
+    extract_patterns(gds, width, height);
 
-    double width = 5.0;
-    double height = 5.0;
+    cout << endl;
+    cout << "After extraction:" << endl;
 
-    cout
-        << "Shapes loaded: "
-        << shapes.size()
-        << endl;
-
-    unordered_map<string, int> shape_map;
-
-    vector<Shape> template_shapes;
-
-    vector<ShapeInstance> instances;
-
-    for (auto &shape : shapes)
-    {
-        string canonical =
-            build_canonical_shape(shape);
-
-        int template_id;
-
-        if (shape_map.count(canonical))
-        {
-            template_id =
-                shape_map[canonical];
-        }
-        else
-        {
-            template_id =
-                static_cast<int>(
-                    template_shapes.size());
-
-            shape_map[canonical] =
-                template_id;
-
-            template_shapes.push_back(shape);
-        }
-
-        instances.push_back({template_id,
-                             shape.min_x,
-                             shape.min_y});
-    }
-
-    unordered_map<string, int> pattern_map;
-
-    vector<Pattern> patterns;
-
-    for (int i = 0; i < instances.size(); ++i)
-    {
-        auto &anchor =
-            instances[i];
-
-        vector<PatternElement> elements;
-
-        double origin_x = anchor.x;
-        double origin_y = anchor.y;
-
-        for (int j = 0; j < instances.size(); ++j)
-        {
-            auto &other =
-                instances[j];
-
-            auto &shape =
-                shapes[j];
-
-            if (!inside_window(
-                    shape,
-                    origin_x,
-                    origin_y,
-                    width,
-                    height))
-            {
-                continue;
-            }
-
-            elements.push_back({other.template_id,
-                                other.x - origin_x,
-                                other.y - origin_y});
-        }
-
-        if (elements.empty())
-        {
-            continue;
-        }
-
-        string key =
-            build_pattern_key(elements);
-
-        if (!pattern_map.count(key))
-        {
-            Pattern pattern;
-
-            pattern.id =
-                static_cast<int>(
-                    patterns.size()) +
-                1;
-
-            pattern.elements =
-                elements;
-
-            patterns.push_back(pattern);
-
-            pattern_map[key] =
-                pattern.id - 1;
-        }
-
-        int pattern_index =
-            pattern_map[key];
-
-        patterns[pattern_index]
-            .placements
-            .push_back({origin_x,
-                        origin_y});
-    }
-
-    vector<Pattern> filtered_patterns;
-
-    for (auto &pattern : patterns)
-    {
-        if (pattern.placements.size() < 2)
-        {
-            continue;
-        }
-
-        filtered_patterns.push_back(pattern);
-    }
-
-    for (auto &pattern : filtered_patterns)
-    {
-        write_pattern_gds(
-            pattern,
-            template_shapes);
-    }
-
-    ofstream placements_file(
-        "placements.txt");
-
-    for (auto &pattern : filtered_patterns)
-    {
-        placements_file
-            << "pattern"
-            << pattern.id
-            << ".gds <-> ";
-
-        for (auto &position : pattern.placements)
-        {
-            placements_file
-                << "("
-                << position.x
-                << ","
-                << position.y
-                << ") ";
-        }
-
-        placements_file
-            << "\n";
-    }
-
-    placements_file.close();
-
-    cout
-        << "Patterns found: "
-        << filtered_patterns.size()
-        << endl;
+    cout << "Patterns found: " << gds.pattern_registry.size() << endl;
 
     return 0;
 }
