@@ -1,3 +1,5 @@
 {
-    "C_Cpp.errorSquiggles": "disabled"
+    "C_Cpp.errorSquiggles": "disabled",
+    "code-runner.runInTerminal": true,
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
 }

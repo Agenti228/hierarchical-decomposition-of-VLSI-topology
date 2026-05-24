@@ -21,21 +21,27 @@ namespace fs = std::filesystem;
 struct ProgressBar
 {
     string label;
-    int total;
-    int current = 0;
-    int bar_width = 40;
+    size_t total;
+    size_t current = 0;
 
-    ProgressBar(const string &label_, int total_)
+    size_t bar_width = 40;
+    size_t update_every = 10000;
+
+    ProgressBar(const string &label_, size_t total_)
     {
         label = label_;
         total = total_;
         print();
     }
 
-    void tick(int step = 1)
+    void tick()
     {
-        current += step;
-        print();
+        current++;
+
+        if (current % update_every == 0 || current >= total)
+        {
+            print();
+        }
     }
 
     void done()
@@ -48,19 +54,17 @@ struct ProgressBar
 private:
     void print() const
     {
-        double pct = total > 0 ? (double)current / total : 1.0;
-        int filled = (int)(pct * bar_width);
+        double pct = total ? (double)current / total : 1.0;
+        size_t filled = (size_t)(pct * bar_width);
 
-        std::cout << "\r" << label << " [";
-        for (int i = 0; i < bar_width; ++i)
+        std::cout << "\033[2K\r" << label << " [";
+
+        for (size_t i = 0; i < bar_width; ++i)
         {
             std::cout << (i < filled ? '#' : '.');
         }
 
-        std::cout << "] "
-                  << current << "/" << total
-                  << " (" << (int)(pct * 100) << "%)"
-                  << std::flush;
+        std::cout << "] " << current << "/" << total << " " << (int)(pct * 100) << "%" << std::flush;
     }
 };
 
@@ -417,6 +421,8 @@ static bool expand_patterns_once(GDSContext &ctx, int64_t win_w, int64_t win_h)
 
     size_t pattern_count = ctx.pattern_registry.size();
 
+    ProgressBar pb("expanding patterns", pattern_count);
+
     for (size_t pattern_idx = 0; pattern_idx < pattern_count; pattern_idx++)
     {
         const vector<size_t> &shape_indices = ctx.pattern_registry.shapes_of(pattern_idx);
@@ -504,20 +510,17 @@ static bool expand_patterns_once(GDSContext &ctx, int64_t win_w, int64_t win_h)
         }
 
         changed = true;
-
-        cout << "[expand] pid=" << pattern_idx
-             << " intersection=" << intersection.size()
-             << " anchors=" << shape_indices.size()
-             << " shapes_left=" << ctx.shapes.size() << "\n";
+        pb.tick();
     }
 
-    cout << "[expand] patterns in registry: " << ctx.pattern_registry.size() << "  changed=" << changed << "\n";
+    pb.done();
     return changed;
 }
 
 static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir)
 {
     fs::create_directories(output_dir);
+    ProgressBar pb("saving patterns", ctx.pattern_registry.size());
 
     int file_idx = 1;
     for (int pid = 0; pid < (int)ctx.pattern_registry.size(); ++pid)
@@ -559,21 +562,11 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         lib.write_gds(fname.c_str(), 0, NULL);
         lib.free_all();
 
-        cout << "pattern" << file_idx << ".gds  <->  ";
-        for (size_t si : shape_indices)
-        {
-            if ((ctx.shapes[si]).absorbed)
-            {
-                continue;
-            }
-            const IntVec2 &pos = ctx.shapes[si].position_on_canvas;
-            cout << "(" << from_grid(pos.x, ctx.grid_step)
-                 << "," << from_grid(pos.y, ctx.grid_step) << ") ";
-        }
-        cout << "\n";
-
-        ++file_idx;
+        file_idx++;
+        pb.tick();
     }
+
+    pb.done();
 }
 
 static GDSContext read_gds_file(const string &filepath)
@@ -586,9 +579,7 @@ static GDSContext read_gds_file(const string &filepath)
 
     ctx.grid_step = file_precision / file_unit;
 
-    cout << "[read_gds] unit=" << file_unit
-         << "  precision=" << file_precision
-         << "  grid_step=" << ctx.grid_step << "\n";
+    cout << "[read_gds] unit=" << file_unit << "  precision=" << file_precision << "  grid_step=" << ctx.grid_step << "\n";
 
     gdstk::ErrorCode err = gdstk::ErrorCode::NoError;
     gdstk::Library lib = gdstk::read_gds(filepath.c_str(), 0, 0, nullptr, &err);
@@ -606,7 +597,23 @@ static GDSContext read_gds_file(const string &filepath)
 
     uint64_t total_polys = 0;
     for (uint64_t ci = 0; ci < top_cells.count; ++ci)
-        total_polys += top_cells[ci]->polygon_array.count;
+    {
+        gdstk::Cell *cell = top_cells[ci];
+
+        gdstk::Array<gdstk::Polygon *> flat_polys = {};
+
+        cell->get_polygons(true, true, -1, false, 0, flat_polys);
+
+        total_polys += flat_polys.count;
+
+        for (uint64_t pi = 0; pi < flat_polys.count; ++pi)
+        {
+            flat_polys[pi]->clear();
+            gdstk::free_allocation(flat_polys[pi]);
+        }
+
+        flat_polys.clear();
+    }
 
     ProgressBar pb("reading file", (int)total_polys);
 
@@ -625,8 +632,7 @@ static GDSContext read_gds_file(const string &filepath)
 
             // Primitive конвертирует double → int64_t через grid_step внутри
             Primitive primitive(polygon->point_array, layer, ctx.grid_step);
-            size_t primitive_idx = ctx.primitive_registry.get_or_insert(
-                primitive.canonical_hash, primitive);
+            size_t primitive_idx = ctx.primitive_registry.get_or_insert(primitive.canonical_hash, primitive);
 
             // Начальный Pattern из одного примитива
             Pattern pat;
@@ -650,11 +656,9 @@ static GDSContext read_gds_file(const string &filepath)
             size_t shape_idx = ctx.shapes.size();
             ctx.shapes.push_back(shape);
 
-            size_t pattern_idx = ctx.pattern_registry.get_or_insert(
-                pat.canonical_hash, pat, shape_idx);
+            size_t pattern_idx = ctx.pattern_registry.get_or_insert(pat.canonical_hash, pat, shape_idx);
 
-            ctx.shapes[shape_idx].set_pattern_idx(
-                pattern_idx, ctx.pattern_registry, ctx.primitive_registry);
+            ctx.shapes[shape_idx].set_pattern_idx(pattern_idx, ctx.pattern_registry, ctx.primitive_registry);
 
             polygon->clear();
             gdstk::free_allocation(polygon);
@@ -680,7 +684,7 @@ static GDSContext read_gds_file(const string &filepath)
 
 int main()
 {
-    const string filepath = string(RESOURCES_PATH) + "66.gds";
+    const string filepath = string(RESOURCES_PATH) + "big_ine_layer.gds";
 
     constexpr double WIN_W_UM = 5.0;
     constexpr double WIN_H_UM = 5.0;
@@ -696,15 +700,10 @@ int main()
     int64_t win_w = (int64_t)std::round(WIN_W_UM / ctx.grid_step);
     int64_t win_h = (int64_t)std::round(WIN_H_UM / ctx.grid_step);
 
-    cout << "[debug] grid_step=" << ctx.grid_step
-         << " win_w=" << win_w
-         << " win_h=" << win_h << "\n";
-
     cout << "[main] window: " << win_w << " x " << win_h << " grid units\n";
 
     for (int i = 0; i < MAX_ITER; ++i)
     {
-        cout << "=== iteration " << i + 1 << " ===\n";
         if (!expand_patterns_once(ctx, win_w, win_h))
         {
             break;
