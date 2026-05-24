@@ -407,8 +407,7 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
                   return ctx.shapes[a].bbox.min_x < ctx.shapes[b].bbox.min_x;
               });
 
-    // Для каждой фигуры ищем соседей в окне по X через бинарный поиск,
-    // затем фильтруем по Y
+    // Для каждой фигуры ищем соседей в окне по X через бинарный поиск, затем фильтруем по Y
     for (size_t i = 0; i < sorted_indices.size(); ++i)
     {
         size_t shape_idx = sorted_indices[i];
@@ -419,8 +418,7 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
         int64_t x_max = shape.bbox.min_x + win_w;
 
         // Бинарный поиск: первый элемент с bbox.min_x >= x_min
-        // (все элементы до i уже имеют меньший или равный x,
-        // но нам нужны и те что слева от shape в пределах окна)
+        // (все элементы до i уже имеют меньший или равный x, но нам нужны и те что слева от shape в пределах окна)
         size_t lo = 0, hi = 0;
         {
             size_t left = 0, right = i;
@@ -502,8 +500,7 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
                 continue;
             }
 
-            // Избегаем дублирования пары (i,j) и (j,i)
-            // берём только j > i по позиции в sorted_indices
+            // Избегаем дублирования пары (i,j) и (j,i). берем только j > i по позиции в sorted_indices
             if (neighbor_idx < shape_idx && j < i)
             {
                 continue;
@@ -612,23 +609,41 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
 {
     fs::create_directories(output_dir);
 
+    string primitives_dir = output_dir + "/primitives";
+    fs::create_directories(primitives_dir);
+
+    const string txt_path = output_dir + "/patterns.txt";
+    std::ofstream txt(txt_path);
+    if (!txt.is_open())
+    {
+        cerr << "Failed to open: " << txt_path << endl;
+        return;
+    }
+
     unordered_map<size_t, vector<size_t>> pattern_to_shapes;
-    for (size_t si = 0; si < ctx.shapes.size(); ++si)
+    for (size_t si = 0; si < ctx.shapes.size(); si++)
     {
         const Shape &s = ctx.shapes[si];
         if (s.absorbed)
+        {
             continue;
+        }
+
         pattern_to_shapes[s.pattern_idx].push_back(si);
     }
 
     int file_idx = 1;
     for (const auto &[pid, shape_indices] : pattern_to_shapes)
     {
+        bool is_leaf = ctx.pattern_registry[pid].is_leaf;
+        string base_dir = is_leaf ? primitives_dir : output_dir;
+        string prefix = is_leaf ? "primitive_" : "pattern_";
+
         gdstk::Library lib = {};
         lib.init("pattern_lib", 1e-6, 1e-9);
 
         gdstk::Cell *cell = (gdstk::Cell *)calloc(1, sizeof(gdstk::Cell));
-        cell->init("TOP");
+        cell->init("pattern");
 
         // Раскрываем паттерн — получаем примитивы с offset от (0,0) паттерна
         vector<std::pair<IntVec2, size_t>> primitives;
@@ -642,9 +657,7 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         {
             const Primitive &prim = ctx.primitive_registry[prim_idx];
 
-            // bbox примитива начинается в (0,0) после канонизации,
-            // но position_on_canvas может отличаться от bbox.min.
-            // Нужно найти bbox.min примитива в его локальных координатах.
+            // bbox примитива начинается в (0,0) после канонизации, но position_on_canvas может отличаться от bbox.min. Нужно найти bbox.min примитива в его локальных координатах.
             int64_t prim_bbox_min_x = prim.canonical_points[0].x;
             int64_t prim_bbox_min_y = prim.canonical_points[0].y;
             for (const IntVec2 &cp : prim.canonical_points)
@@ -669,12 +682,28 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
 
         lib.cell_array.append(cell);
 
-        string fname = output_dir + "/pattern" + std::to_string(file_idx) + ".gds";
+        string fname = base_dir + "/" + prefix + std::to_string(file_idx) + ".gds";
         lib.write_gds(fname.c_str(), 0, NULL);
         lib.free_all();
 
+        txt << fname << " <-> ";
+        for (size_t i = 0; i < shape_indices.size(); ++i)
+        {
+            const Shape &s = ctx.shapes[shape_indices[i]];
+            double lx = from_grid(s.bbox.min_x, ctx.grid_step);
+            double ly = from_grid(s.bbox.min_y, ctx.grid_step);
+            txt << "(" << lx << "," << ly << ")";
+            if (i + 1 < shape_indices.size())
+            {
+                txt << ", ";
+            }
+        }
+        txt << "\n";
+
         file_idx++;
     }
+
+    cout << "[save] placements written to " << txt_path << "\n";
 }
 
 static GDSContext read_gds_file(const string &filepath)
@@ -835,7 +864,7 @@ int main()
 
     for (int i = 0; i < config.max_iter; i++)
     {
-        cout << "=== iteration " << i + 1 << " / " << config.max_iter << " ===\n";
+        cout << "iteration " << i + 1 << " / " << config.max_iter << "\n";
 
         if (!expand_patterns_once(gds_context, win_w, win_h))
         {

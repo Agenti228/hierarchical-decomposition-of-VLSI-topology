@@ -7,8 +7,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/Debug/vlsi_topology.exe",
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/Debug",
-            "preLaunchTask": "cmake build"
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "cmake build",
         },
         {
             "name": "Run",
@@ -16,8 +17,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/build/Release/vlsi_topology.exe",
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/Release",
-            "preLaunchTask": "cmake build release"
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "cmake build release",
         }
     ]
 }
