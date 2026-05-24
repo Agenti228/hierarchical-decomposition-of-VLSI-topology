@@ -1,0 +1,4 @@
+# config.cmake.in -- CMake configuration for Qhull
+# Generates QhullConfig.cmake from build/config.cmake.in
+
+include("${CMAKE_CURRENT_LIST_DIR}/QhullTargets.cmake")
