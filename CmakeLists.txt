@@ -1,40 +1,102 @@
 cmake_minimum_required(VERSION 3.13)
 
-
-set(CMAKE_TOOLCHAIN_FILE "C:/tools/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
-set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
-
-
 project(vlsi_topology)
-
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# static libs
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # Static linking
+# static MSVC runtime
+set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    CACHE STRING "" FORCE)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# ---------------- ZLIB ----------------
 
-set(GDSTK_PYTHON OFF CACHE BOOL "" FORCE) # Disable Python bindings for gdstk
-add_subdirectory("thirdParty/gdstk")
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(thirdParty/zlib)
 
+add_library(ZLIB::ZLIB ALIAS zlibstatic)
 
-# we define MY_SOURCES to be a list of all the source files for my project
-file(GLOB_RECURSE MY_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+# zlib target alias
+add_library(ZLIB::ZLIB ALIAS zlibstatic)
 
+# variables for find_package(ZLIB)
+set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
 
-add_executable(${CMAKE_PROJECT_NAME} ${MY_SOURCES})
+set(ZLIB_LIBRARY
+    zlibstatic
+    CACHE STRING "" FORCE)
 
-target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE /utf-8)
+set(ZLIB_LIBRARIES
+    zlibstatic
+    CACHE STRING "" FORCE)
 
-file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources" RESOURCES_PATH_NORMALIZED)
+set(ZLIB_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/zlib"
+    CACHE PATH "" FORCE)
 
-target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC RESOURCES_PATH="${RESOURCES_PATH_NORMALIZED}/") # This is useful to get an ASSETS_PATH in your IDE during development but you should comment this if you compile a release version and uncomment the next line
+set(ZLIB_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/zlib"
+    CACHE PATH "" FORCE)
 
-#target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC RESOURCES_PATH="./resources/") # Uncomment this line to setup the ASSETS_PATH macro to the final assets directory when you share the project
+# ---------------- QHULL ----------------
 
+set(QHULL_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 
-target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include/")
+add_subdirectory(thirdParty/qhull)
 
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE gdstk)
+add_library(Qhull::qhullstatic_r ALIAS qhullstatic_r)
+
+set(QHULL_FOUND TRUE CACHE BOOL "" FORCE)
+
+set(Qhull_FOUND TRUE CACHE BOOL "" FORCE)
+
+set(Qhull_LIBRARY
+    qhullstatic_r
+    CACHE STRING "" FORCE)
+
+set(Qhull_LIBRARIES
+    qhullstatic_r
+    CACHE STRING "" FORCE)
+
+set(Qhull_INCLUDE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/qhull/src"
+    CACHE PATH "" FORCE)
+
+set(Qhull_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/qhull/src"
+    CACHE STRING "" FORCE)
+
+# ---------------- GDSTK ----------------
+
+set(GDSTK_PYTHON OFF CACHE BOOL "" FORCE)
+
+# чтобы find_package внутри gdstk видел библиотеки
+set(ZLIB_FOUND TRUE)
+set(QHULL_FOUND TRUE)
+
+add_subdirectory(thirdParty/gdstk)
+
+# ---------------- APP ----------------
+
+file(GLOB_RECURSE MY_SOURCES
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
+add_executable(${PROJECT_NAME} ${MY_SOURCES})
+
+target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+    gdstk
+)
