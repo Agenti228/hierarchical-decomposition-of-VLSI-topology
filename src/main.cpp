@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <gdstk/gdstk.hpp>
+#include <gdstk/gdstk.h>
 
 using std::cerr;
 using std::cout;

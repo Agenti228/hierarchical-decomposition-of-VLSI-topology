@@ -1,147 +1,94 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.15)
+project(vlsi_topology LANGUAGES C CXX)
 
 # =========================================
 # GLOBAL SETTINGS
 # =========================================
-
-# Только static библиотеки
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-
-# Полностью static runtime MSVC (/MT)
-set(CMAKE_MSVC_RUNTIME_LIBRARY
-    "MultiThreaded$<$<CONFIG:Debug>:Debug>"
-    CACHE STRING "" FORCE)
-
-project(vlsi_topology)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+
+set(DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies" CACHE PATH "Path to dependencies")
 
 # =========================================
 # ZLIB
 # =========================================
-
 set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+add_subdirectory("${DEPS_DIR}/zlib" "${CMAKE_BINARY_DIR}/zlib_build")
 
-add_subdirectory(thirdParty/zlib)
-
-# alias target
-add_library(ZLIB::ZLIB ALIAS zlibstatic)
-
-# variables for find_package(ZLIB)
 set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+set(ZLIB_LIBRARIES zlibstatic CACHE STRING "" FORCE)
+set(ZLIB_INCLUDE_DIR "${DEPS_DIR}/zlib" CACHE PATH "" FORCE)
+set(ZLIB_INCLUDE_DIRS "${DEPS_DIR}/zlib" CACHE PATH "" FORCE)
 
-set(ZLIB_LIBRARY
-    zlibstatic
-    CACHE STRING "" FORCE)
-
-set(ZLIB_LIBRARIES
-    zlibstatic
-    CACHE STRING "" FORCE)
-
-set(ZLIB_INCLUDE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/zlib"
-    CACHE PATH "" FORCE)
-
-set(ZLIB_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/zlib"
-    CACHE PATH "" FORCE)
+if(NOT TARGET ZLIB::ZLIB)
+    add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
 
 # =========================================
 # QHULL
 # =========================================
-
 set(QHULL_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+add_subdirectory("${DEPS_DIR}/qhull" "${CMAKE_BINARY_DIR}/qhull_build")
 
-add_subdirectory(thirdParty/qhull)
-
-# alias target
-add_library(Qhull::qhullstatic_r ALIAS qhullstatic_r)
-
-# variables for find_package(Qhull)
+if(NOT TARGET QHULL::QHULL)
+    add_library(QHULL::QHULL UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(QHULL::QHULL PROPERTIES
+        IMPORTED_LOCATION "$<TARGET_FILE:qhullstatic_r>"
+        INTERFACE_INCLUDE_DIRECTORIES "${DEPS_DIR}/qhull/src"
+    )
+endif()
 set(QHULL_FOUND TRUE CACHE BOOL "" FORCE)
-set(Qhull_FOUND TRUE CACHE BOOL "" FORCE)
+set(QHULL_VERSION "8.0.2" CACHE STRING "" FORCE)
 
-set(Qhull_LIBRARY
-    qhullstatic_r
-    CACHE STRING "" FORCE)
-
-set(Qhull_LIBRARIES
-    qhullstatic_r
-    CACHE STRING "" FORCE)
-
-set(Qhull_INCLUDE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/qhull/src"
-    CACHE PATH "" FORCE)
-
-set(Qhull_INCLUDE_DIRS
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/qhull/src"
-    CACHE STRING "" FORCE)
+if(NOT TARGET Qhull::qhullstatic_r)
+    add_library(Qhull::qhullstatic_r ALIAS qhullstatic_r)
+endif()
 
 # =========================================
 # GDSTK
 # =========================================
-
 set(GDSTK_PYTHON OFF CACHE BOOL "" FORCE)
-
-add_subdirectory(thirdParty/gdstk)
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/gdstk_includes/gdstk")
+file(GLOB GDSTK_HEADERS "${DEPS_DIR}/gdstk/src/*.h")
+file(COPY ${GDSTK_HEADERS} DESTINATION "${CMAKE_BINARY_DIR}/gdstk_includes/gdstk")
+add_subdirectory("${DEPS_DIR}/gdstk" "${CMAKE_BINARY_DIR}/gdstk_build")
 
 # =========================================
-# APP
+# MAIN EXECUTABLE
 # =========================================
+file(GLOB_RECURSE PROJECT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+if(NOT PROJECT_SOURCES)
+    message(FATAL_ERROR "No source files found in src/ directory!")
+endif()
 
-file(GLOB_RECURSE MY_SOURCES
-    CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /utf-8 /W4 /permissive->
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>: -Wall -Wextra -finput-charset=UTF-8 -fexec-charset=UTF-8>
 )
-
-add_executable(${PROJECT_NAME} ${MY_SOURCES})
-
-target_compile_options(${PROJECT_NAME}
-    PRIVATE
-    /utf-8
-)
+target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 target_include_directories(${PROJECT_NAME}
-    PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_BINARY_DIR}/gdstk_includes"
 )
 
 target_link_libraries(${PROJECT_NAME}
-    PRIVATE
-    gdstk
-    zlibstatic
-    qhullstatic_r
+    PRIVATE gdstk ZLIB::ZLIB Qhull::qhullstatic_r
 )
 
 # =========================================
-# WINDOWS STATIC DEFINES
+# OUTPUT DIRECTORIES
 # =========================================
-
-target_compile_definitions(${PROJECT_NAME}
-    PRIVATE
-    _CRT_SECURE_NO_WARNINGS
-)
-
-# =========================================
-# OUTPUT FOLDERS
-# =========================================
-
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
-foreach(CONFIG Debug Release RelWithDebInfo MinSizeRel)
-    string(TOUPPER ${CONFIG} CONFIG_UPPER)
-
-    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${CONFIG_UPPER}
-        ${CMAKE_BINARY_DIR}/bin/${CONFIG})
-
-    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${CONFIG_UPPER}
-        ${CMAKE_BINARY_DIR}/bin/${CONFIG})
-
-    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${CONFIG_UPPER}
-        ${CMAKE_BINARY_DIR}/lib/${CONFIG})
-endforeach()
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
