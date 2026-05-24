@@ -724,8 +724,6 @@ static GDSContext read_gds_file(const string &filepath)
     if (err != gdstk::ErrorCode::NoError)
     {
         cerr << "[read_gds] error reading file: " << filepath << "\n";
-        lib.free_all();
-        return gds_context;
     }
 
     gdstk::Array<gdstk::Cell *> top_cells = {};
