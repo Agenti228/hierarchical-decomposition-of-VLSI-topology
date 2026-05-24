@@ -1,26 +1,34 @@
 cmake_minimum_required(VERSION 3.13)
 
+# =========================================
+# GLOBAL SETTINGS
+# =========================================
+
+# Только static библиотеки
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+# Полностью static runtime MSVC (/MT)
+set(CMAKE_MSVC_RUNTIME_LIBRARY
+    "MultiThreaded"
+    CACHE STRING "" FORCE)
+
 project(vlsi_topology)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# static libs
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# static MSVC runtime
-set(CMAKE_MSVC_RUNTIME_LIBRARY
-    "MultiThreaded$<$<CONFIG:Debug>:Debug>"
-    CACHE STRING "" FORCE)
-
-# ---------------- ZLIB ----------------
+# =========================================
+# ZLIB
+# =========================================
 
 set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SKIP_INSTALL_ALL ON CACHE BOOL "" FORCE)
+
 add_subdirectory(thirdParty/zlib)
 
-add_library(ZLIB::ZLIB ALIAS zlibstatic)
-
-# zlib target alias
+# alias target
 add_library(ZLIB::ZLIB ALIAS zlibstatic)
 
 # variables for find_package(ZLIB)
@@ -42,17 +50,20 @@ set(ZLIB_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/zlib"
     CACHE PATH "" FORCE)
 
-# ---------------- QHULL ----------------
+# =========================================
+# QHULL
+# =========================================
 
 set(QHULL_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 
 add_subdirectory(thirdParty/qhull)
 
+# alias target
 add_library(Qhull::qhullstatic_r ALIAS qhullstatic_r)
 
+# variables for find_package(Qhull)
 set(QHULL_FOUND TRUE CACHE BOOL "" FORCE)
-
 set(Qhull_FOUND TRUE CACHE BOOL "" FORCE)
 
 set(Qhull_LIBRARY
@@ -71,25 +82,29 @@ set(Qhull_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdParty/qhull/src"
     CACHE STRING "" FORCE)
 
-# ---------------- GDSTK ----------------
+# =========================================
+# GDSTK
+# =========================================
 
 set(GDSTK_PYTHON OFF CACHE BOOL "" FORCE)
 
-# чтобы find_package внутри gdstk видел библиотеки
-set(ZLIB_FOUND TRUE)
-set(QHULL_FOUND TRUE)
-
 add_subdirectory(thirdParty/gdstk)
 
-# ---------------- APP ----------------
+# =========================================
+# APP
+# =========================================
 
 file(GLOB_RECURSE MY_SOURCES
     CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
 
 add_executable(${PROJECT_NAME} ${MY_SOURCES})
 
-target_compile_options(${PROJECT_NAME} PRIVATE /utf-8)
+target_compile_options(${PROJECT_NAME}
+    PRIVATE
+    /utf-8
+)
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC
@@ -99,4 +114,21 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
     gdstk
+)
+
+# =========================================
+# WINDOWS STATIC DEFINES
+# =========================================
+
+target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    _CRT_SECURE_NO_WARNINGS
+)
+
+# =========================================
+# OUTPUT FOLDERS
+# =========================================
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

@@ -22,59 +22,9 @@ struct Config
 {
     string input_file = "";
     string output_dir = "./output_patterns";
-    double win_w_um = 3.5;
-    double win_h_um = 3.0;
+    double win_w_um = 5.0;
+    double win_h_um = 5.0;
     int max_iter = 100;
-
-    static void print_usage(const char *prog)
-    {
-        cout << "Usage: " << prog << " [options]\n"
-             << "  -i <file>    Input GDS file (required)\n"
-             << "  -o <dir>     Output directory (default: ./output_patterns)\n"
-             << "  -w <float>   Window width in um (default: 3.5)\n"
-             << "  -h <float>   Window height in um (default: 3.0)\n"
-             << "  -n <int>     Max iterations (default: 100)\n";
-    }
-
-    static Config parse(int argc, char *argv[])
-    {
-        Config cfg;
-        for (int i = 1; i < argc; ++i)
-        {
-            string arg = argv[i];
-            if ((arg == "-i") && i + 1 < argc)
-            {
-                cfg.input_file = argv[++i];
-            }
-            else if ((arg == "-o") && i + 1 < argc)
-            {
-                cfg.output_dir = argv[++i];
-            }
-            else if ((arg == "-w") && i + 1 < argc)
-            {
-                cfg.win_w_um = std::stod(argv[++i]);
-            }
-            else if ((arg == "-h") && i + 1 < argc)
-            {
-                cfg.win_h_um = std::stod(argv[++i]);
-            }
-            else if ((arg == "-n") && i + 1 < argc)
-            {
-                cfg.max_iter = std::stoi(argv[++i]);
-            }
-            else
-            {
-                print_usage(argv[0]);
-                exit(1);
-            }
-        }
-        if (cfg.input_file.empty())
-        {
-            print_usage(argv[0]);
-            exit(1);
-        }
-        return cfg;
-    }
 };
 
 template <typename T>
@@ -411,9 +361,13 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> rig
 
             // Проверяем что пара помещается в окно
             if (pair_max_x - pair_min_x > win_w)
+            {
                 continue;
+            }
             if (pair_max_y - pair_min_y > win_h)
+            {
                 continue;
+            }
 
             NeighborKey key;
             key.offset_x = neighbor.bbox.min_x - shape.bbox.min_x;
@@ -440,8 +394,12 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
     vector<size_t> sorted_indices;
     sorted_indices.reserve(ctx.shapes.size());
     for (size_t i = 0; i < ctx.shapes.size(); ++i)
+    {
         if (!ctx.shapes[i].absorbed)
+        {
             sorted_indices.push_back(i);
+        }
+    }
 
     std::sort(sorted_indices.begin(), sorted_indices.end(),
               [&](size_t a, size_t b)
@@ -462,17 +420,21 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
 
         // Бинарный поиск: первый элемент с bbox.min_x >= x_min
         // (все элементы до i уже имеют меньший или равный x,
-        //  но нам нужны и те что слева от shape в пределах окна)
-        size_t lo = 0, hi = sorted_indices.size();
+        // но нам нужны и те что слева от shape в пределах окна)
+        size_t lo = 0, hi = 0;
         {
             size_t left = 0, right = i;
             while (left < right)
             {
                 size_t mid = (left + right) / 2;
                 if (ctx.shapes[sorted_indices[mid]].bbox.min_x < x_min)
+                {
                     left = mid + 1;
+                }
                 else
+                {
                     right = mid;
+                }
             }
             lo = left;
         }
@@ -483,9 +445,13 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
             {
                 size_t mid = (left + right) / 2;
                 if (ctx.shapes[sorted_indices[mid]].bbox.min_x <= x_max)
+                {
                     left = mid + 1;
+                }
                 else
+                {
                     right = mid;
+                }
             }
             hi = left;
         }
@@ -494,17 +460,22 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
         {
             size_t neighbor_idx = sorted_indices[j];
             if (neighbor_idx == shape_idx)
+            {
                 continue;
+            }
             if (ctx.shapes[neighbor_idx].absorbed)
+            {
                 continue;
-
+            }
             const Shape &neighbor = ctx.shapes[neighbor_idx];
             const Pattern &pat_neighbor = ctx.pattern_registry[neighbor.pattern_idx];
 
             // Фильтр по Y
             int64_t dy = std::abs(neighbor.bbox.min_y - shape.bbox.min_y);
             if (dy > win_h)
+            {
                 continue;
+            }
 
             // Проверка что пара целиком в окне
             int64_t anchor_x = shape.bbox.min_x + pat_shape.bbox.min_x;
@@ -523,14 +494,20 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
             int64_t pair_max_y = std::max(shape_max_y, nbr_max_y);
 
             if (pair_max_x - pair_min_x > win_w)
+            {
                 continue;
+            }
             if (pair_max_y - pair_min_y > win_h)
+            {
                 continue;
+            }
 
             // Избегаем дублирования пары (i,j) и (j,i)
             // берём только j > i по позиции в sorted_indices
             if (neighbor_idx < shape_idx && j < i)
+            {
                 continue;
+            }
 
             NeighborKey key;
             key.offset_x = neighbor.bbox.min_x - shape.bbox.min_x;
@@ -647,10 +624,6 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
     int file_idx = 1;
     for (const auto &[pid, shape_indices] : pattern_to_shapes)
     {
-        // Пропускаем листовые паттерны (одиночные примитивы)
-        if (ctx.pattern_registry[pid].is_leaf)
-            continue;
-
         gdstk::Library lib = {};
         lib.init("pattern_lib", 1e-6, 1e-9);
 
@@ -700,16 +673,7 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         lib.write_gds(fname.c_str(), 0, NULL);
         lib.free_all();
 
-        // cout << "pattern" << file_idx << ".gds  <->  ";
-        // for (size_t si : shape_indices)
-        // {
-        //     const IntVec2 &p = ctx.shapes[si].position_on_canvas;
-        //     cout << "(" << from_grid(p.x, ctx.grid_step)
-        //          << "," << from_grid(p.y, ctx.grid_step) << ") ";
-        // }
-        // cout << "\n";
-
-        ++file_idx;
+        file_idx++;
     }
 }
 
@@ -812,31 +776,66 @@ static GDSContext read_gds_file(const string &filepath)
     return gds_context;
 }
 
-int main(int argc, char *argv[])
+int main()
 {
-    Config cfg = Config::parse(argc, argv);
+    Config config;
 
-    cout << "[config] input:   " << cfg.input_file << "\n"
-         << "[config] output:  " << cfg.output_dir << "\n"
-         << "[config] win_w:   " << cfg.win_w_um << " um\n"
-         << "[config] win_h:   " << cfg.win_h_um << " um\n"
-         << "[config] max_iter:" << cfg.max_iter << "\n";
+    cout << "Input GDS file: ";
+    std::getline(std::cin, config.input_file);
 
-    GDSContext gds_context = read_gds_file(cfg.input_file);
+    cout << "Output directory [./output_patterns]: ";
+    std::string out;
+    std::getline(std::cin, out);
+    if (!out.empty())
+    {
+        config.output_dir = out;
+    }
+
+    cout << "Window width in um [5.0]: ";
+    std::string w;
+    std::getline(std::cin, w);
+    if (!w.empty())
+    {
+        config.win_w_um = std::stod(w);
+    }
+
+    cout << "Window height in um [5.0]: ";
+    std::string h;
+    std::getline(std::cin, h);
+    if (!h.empty())
+    {
+        config.win_h_um = std::stod(h);
+    }
+
+    cout << "Max iterations [100]: ";
+    std::string n;
+    std::getline(std::cin, n);
+    if (!n.empty())
+    {
+        config.max_iter = std::stoi(n);
+    }
+
+    cout << "\n[config] input:   " << config.input_file << "\n"
+         << "[config] output:  " << config.output_dir << "\n"
+         << "[config] win_w:   " << config.win_w_um << " um\n"
+         << "[config] win_h:   " << config.win_h_um << " um\n"
+         << "[config] max_iter:" << config.max_iter << "\n";
+
+    GDSContext gds_context = read_gds_file(config.input_file);
     if (gds_context.shapes.empty())
     {
         cerr << "[main] no shapes loaded\n";
         return 1;
     }
 
-    int64_t win_w = (int64_t)std::round(cfg.win_w_um / gds_context.grid_step);
-    int64_t win_h = (int64_t)std::round(cfg.win_h_um / gds_context.grid_step);
+    int64_t win_w = (int64_t)std::round(config.win_w_um / gds_context.grid_step);
+    int64_t win_h = (int64_t)std::round(config.win_h_um / gds_context.grid_step);
 
     cout << "[main] window: " << win_w << " x " << win_h << " grid units\n";
 
-    for (int i = 0; i < cfg.max_iter; i++)
+    for (int i = 0; i < config.max_iter; i++)
     {
-        cout << "=== iteration " << i + 1 << " / " << cfg.max_iter << " ===\n";
+        cout << "=== iteration " << i + 1 << " / " << config.max_iter << " ===\n";
 
         if (!expand_patterns_once(gds_context, win_w, win_h))
         {
@@ -845,6 +844,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    save_patterns_to_gds(gds_context, cfg.output_dir);
+    save_patterns_to_gds(gds_context, config.output_dir);
     return 0;
 }
