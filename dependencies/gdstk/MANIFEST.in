@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+include CMakeLists.txt
+include gdstk.pc.in
+include src/*
+include src/clipperlib/*
+include src/libqhull_r/*
+include python/*.cpp
