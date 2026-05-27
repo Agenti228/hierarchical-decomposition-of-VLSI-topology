@@ -62,7 +62,6 @@ output_patterns/
   pattern_2.gds      <- геометрия второго паттерна
   ...
   pattern_N.gds
-  pattern_stats.txt  <- статистика поиска паттренов 
   patterns.txt       <- координаты размещений
 ```
 
