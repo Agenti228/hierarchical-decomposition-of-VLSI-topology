@@ -738,12 +738,12 @@ static void save_pattern_stats(const GDSContext &gds_context, const string &outp
 {
     struct PatternStat
     {
-        int pattern_idx;
-        int element_count;
-        int usage_count;
+        size_t pattern_idx;
+        size_t element_count;
+        size_t usage_count;
     };
 
-    unordered_map<int, int> usage_map;
+    unordered_map<size_t, size_t> usage_map;
     for (auto &shape : gds_context.shapes)
     {
         if (!shape.absorbed)
@@ -753,14 +753,14 @@ static void save_pattern_stats(const GDSContext &gds_context, const string &outp
     }
 
     vector<PatternStat> stats;
-    for (int i = 0; i < gds_context.pattern_registry.size(); i++)
+    for (size_t i = 0; i < gds_context.pattern_registry.size(); i++)
     {
-        int usage = usage_map.count(i) ? usage_map[i] : 0;
+        size_t usage = usage_map.count(i) ? usage_map[i] : 0;
         if (usage == 0)
         {
             continue;
         }
-        stats.push_back({i, static_cast<int>(gds_context.pattern_registry[i].pattern_elements.size()), usage});
+        stats.push_back({i, gds_context.pattern_registry[i].pattern_elements.size(), usage});
     }
 
     sort(stats.begin(), stats.end(),
@@ -773,18 +773,18 @@ static void save_pattern_stats(const GDSContext &gds_context, const string &outp
              return a.usage_count > b.usage_count;
          });
 
-    int w_pattern_idx = string("pattern_idx").size();
-    int w_element = string("elements").size();
-    int w_usages = string("usages").size();
+    size_t w_pattern_idx = string("pattern_idx").size();
+    size_t w_element = string("elements").size();
+    size_t w_usages = string("usages").size();
 
     for (auto &stat : stats)
     {
-        w_pattern_idx = std::max(w_pattern_idx, (int)std::to_string(stat.pattern_idx).size());
-        w_element = std::max(w_element, (int)std::to_string(stat.element_count).size());
-        w_usages = std::max(w_usages, (int)std::to_string(stat.usage_count).size());
+        w_pattern_idx = std::max(w_pattern_idx, std::to_string(stat.pattern_idx).size());
+        w_element = std::max(w_element, std::to_string(stat.element_count).size());
+        w_usages = std::max(w_usages, std::to_string(stat.usage_count).size());
     }
 
-    auto pad = [](const string &s, int w)
+    auto pad = [](const string &s, size_t w)
     {
         return s + string(w - s.size(), ' ');
     };
@@ -807,8 +807,8 @@ static void save_pattern_stats(const GDSContext &gds_context, const string &outp
              << pad(std::to_string(stat.usage_count), w_usages) << "\n";
     }
 
-    int complex_usages = 0;
-    int total_shapes = 0;
+    size_t complex_usages = 0;
+    size_t total_shapes = 0;
     for (auto &shape : gds_context.shapes)
     {
         if (shape.absorbed)
