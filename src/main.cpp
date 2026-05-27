@@ -454,6 +454,11 @@ static bool expand_patterns_once(GDSContext &gds_context, int64_t win_w, int64_t
 {
     auto pattern_pairs = register_all_shape_pairs_as_patterns(gds_context, win_w, win_h);
 
+    if (pattern_pairs.empty())
+    {
+        return false;
+    }
+
     auto max_it = std::max_element(
         pattern_pairs.begin(),
         pattern_pairs.end(),
@@ -478,22 +483,22 @@ static bool expand_patterns_once(GDSContext &gds_context, int64_t win_w, int64_t
     new_pattern.pattern_elements.push_back({{max_it->first.offset_x, max_it->first.offset_y}, gds_context.shapes[max_it->second[0].neighbor_idx].pattern_idx});
     std::sort(new_pattern.pattern_elements.begin(), new_pattern.pattern_elements.end());
 
-    int64_t min_x = INT64_MAX, min_y = INT64_MAX;
-    int64_t max_x = INT64_MIN, max_y = INT64_MIN;
+    int64_t x_min = INT64_MAX, y_min = INT64_MAX;
+    int64_t x_max = INT64_MIN, y_max = INT64_MIN;
 
-    for (const Pattern::PatternElement &pe : new_pattern.pattern_elements)
+    for (const Pattern::PatternElement &pattern_element : new_pattern.pattern_elements)
     {
-        const Pattern &child = gds_context.pattern_registry[pe.pattern_idx];
-        min_x = std::min(min_x, pe.position_in_pattern.x + child.bbox.min_x);
-        min_y = std::min(min_y, pe.position_in_pattern.y + child.bbox.min_y);
-        max_x = std::max(max_x, pe.position_in_pattern.x + child.bbox.max_x);
-        max_y = std::max(max_y, pe.position_in_pattern.y + child.bbox.max_y);
+        const Pattern &child = gds_context.pattern_registry[pattern_element.pattern_idx];
+        x_min = std::min(x_min, pattern_element.position_in_pattern.x + child.bbox.min_x);
+        y_min = std::min(y_min, pattern_element.position_in_pattern.y + child.bbox.min_y);
+        x_max = std::max(x_max, pattern_element.position_in_pattern.x + child.bbox.max_x);
+        y_max = std::max(y_max, pattern_element.position_in_pattern.y + child.bbox.max_y);
     }
 
-    new_pattern.bbox.min_x = min_x;
-    new_pattern.bbox.min_y = min_y;
-    new_pattern.bbox.max_x = max_x;
-    new_pattern.bbox.max_y = max_y;
+    new_pattern.bbox.min_x = x_min;
+    new_pattern.bbox.min_y = y_min;
+    new_pattern.bbox.max_x = x_max;
+    new_pattern.bbox.max_y = y_max;
 
     new_pattern.canonical_hash = compute_pattern_hash(new_pattern);
 
@@ -525,14 +530,14 @@ static void collect_primitives(const GDSContext &gds_context, size_t pattern_idx
     if (pattern.is_leaf)
     {
         // pattern_elements[0].pattern_idx - это primitive_idx
-        const Pattern::PatternElement &pe = pattern.pattern_elements[0];
-        result.push_back({{offset.x + pe.position_in_pattern.x, offset.y + pe.position_in_pattern.y}, pe.pattern_idx});
+        const Pattern::PatternElement &pattern_element = pattern.pattern_elements[0];
+        result.push_back({{offset.x + pattern_element.position_in_pattern.x, offset.y + pattern_element.position_in_pattern.y}, pattern_element.pattern_idx});
         return;
     }
 
-    for (const Pattern::PatternElement &pe : pattern.pattern_elements)
+    for (const Pattern::PatternElement &pattern_element : pattern.pattern_elements)
     {
-        collect_primitives(gds_context, pe.pattern_idx, {offset.x + pe.position_in_pattern.x, offset.y + pe.position_in_pattern.y}, result);
+        collect_primitives(gds_context, pattern_element.pattern_idx, {offset.x + pattern_element.position_in_pattern.x, offset.y + pattern_element.position_in_pattern.y}, result);
     }
 }
 
@@ -554,13 +559,13 @@ static void save_patterns_to_gds(const GDSContext &gds_context, const string &ou
     unordered_map<size_t, vector<size_t>> pattern_to_shapes;
     for (size_t si = 0; si < gds_context.shapes.size(); si++)
     {
-        const Shape &s = gds_context.shapes[si];
-        if (s.absorbed)
+        const Shape &shape = gds_context.shapes[si];
+        if (shape.absorbed)
         {
             continue;
         }
 
-        pattern_to_shapes[s.pattern_idx].push_back(si);
+        pattern_to_shapes[shape.pattern_idx].push_back(si);
     }
 
     int file_idx = 1;
@@ -620,9 +625,9 @@ static void save_patterns_to_gds(const GDSContext &gds_context, const string &ou
         txt << fname << " <-> ";
         for (size_t i = 0; i < shape_indices.size(); i++)
         {
-            const Shape &s = gds_context.shapes[shape_indices[i]];
-            double lx = from_grid(s.bbox.min_x, gds_context.grid_step);
-            double ly = from_grid(s.bbox.min_y, gds_context.grid_step);
+            const Shape &shape = gds_context.shapes[shape_indices[i]];
+            double lx = from_grid(shape.bbox.min_x, gds_context.grid_step);
+            double ly = from_grid(shape.bbox.min_y, gds_context.grid_step);
             txt << "(" << lx << "," << ly << ")";
             if (i + 1 < shape_indices.size())
             {
@@ -734,107 +739,6 @@ static GDSContext read_gds_file(const string &filepath)
     return gds_context;
 }
 
-static void save_pattern_stats(const GDSContext &gds_context, const string &output_dir)
-{
-    struct PatternStat
-    {
-        size_t pattern_idx;
-        size_t element_count;
-        size_t usage_count;
-    };
-
-    unordered_map<size_t, size_t> usage_map;
-    for (auto &shape : gds_context.shapes)
-    {
-        if (!shape.absorbed)
-        {
-            usage_map[shape.pattern_idx]++;
-        }
-    }
-
-    vector<PatternStat> stats;
-    for (size_t i = 0; i < gds_context.pattern_registry.size(); i++)
-    {
-        size_t usage = usage_map.count(i) ? usage_map[i] : 0;
-        if (usage == 0)
-        {
-            continue;
-        }
-        stats.push_back({i, gds_context.pattern_registry[i].pattern_elements.size(), usage});
-    }
-
-    sort(stats.begin(), stats.end(),
-         [](const PatternStat &a, const PatternStat &b)
-         {
-             if (a.element_count != b.element_count)
-             {
-                 return a.element_count > b.element_count;
-             }
-             return a.usage_count > b.usage_count;
-         });
-
-    size_t w_pattern_idx = string("pattern_idx").size();
-    size_t w_element = string("elements").size();
-    size_t w_usages = string("usages").size();
-
-    for (auto &stat : stats)
-    {
-        w_pattern_idx = std::max(w_pattern_idx, std::to_string(stat.pattern_idx).size());
-        w_element = std::max(w_element, std::to_string(stat.element_count).size());
-        w_usages = std::max(w_usages, std::to_string(stat.usage_count).size());
-    }
-
-    auto pad = [](const string &s, size_t w)
-    {
-        return s + string(w - s.size(), ' ');
-    };
-
-    string filepath = output_dir + "/pattern_stats.txt";
-    std::ofstream file(filepath);
-    if (!file.is_open())
-    {
-        cerr << "Failed to open: " << filepath << endl;
-        return;
-    }
-
-    file << pad("pattern_idx", w_pattern_idx) << " | " << pad("elements", w_element) << " | " << pad("usages", w_usages) << "\n";
-    file << string(w_pattern_idx, '-') << "-+-" << string(w_element, '-') << "-+-" << string(w_usages, '-') << "\n";
-
-    for (auto &stat : stats)
-    {
-        file << pad(std::to_string(stat.pattern_idx), w_pattern_idx) << " | "
-             << pad(std::to_string(stat.element_count), w_element) << " | "
-             << pad(std::to_string(stat.usage_count), w_usages) << "\n";
-    }
-
-    size_t complex_usages = 0;
-    size_t total_shapes = 0;
-    for (auto &shape : gds_context.shapes)
-    {
-        if (shape.absorbed)
-        {
-            continue;
-        }
-
-        total_shapes++;
-        if (gds_context.pattern_registry[shape.pattern_idx].pattern_elements.size() > 1)
-        {
-            complex_usages++;
-        }
-    }
-
-    file << "\n";
-    file << "complex / total: " << complex_usages << " / " << total_shapes;
-    if (total_shapes > 0)
-    {
-        file << " (" << (100.0 * complex_usages / total_shapes) << "%)\n";
-    }
-
-    cout << "[save] pattern stats saved to " << filepath << "\n";
-
-    file.close();
-}
-
 int main()
 {
     Config config;
@@ -904,6 +808,5 @@ int main()
     }
 
     save_patterns_to_gds(gds_context, config.pattern_output_dir);
-    save_pattern_stats(gds_context, config.pattern_output_dir);
     return 0;
 }
