@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 struct Config
 {
     string input_file = "";
-    string output_dir = "./output_patterns";
+    string pattern_output_dir = "./output_patterns";
     double win_w_um = 5.0;
     double win_h_um = 5.0;
     int max_iter = 100;
@@ -52,7 +52,10 @@ struct IntVec2
     bool operator<(const IntVec2 &other) const
     {
         if (x != other.x)
+        {
             return x < other.x;
+        }
+
         return y < other.y;
     }
 
@@ -79,14 +82,14 @@ struct Bbox
     }
 };
 
-static int64_t to_grid(double val, double grid_step)
+static int64_t to_grid(double value, double grid_step)
 {
-    return (int64_t)std::round(val / grid_step);
+    return (int64_t)std::round(value / grid_step);
 }
 
-static double from_grid(int64_t val, double grid_step)
+static double from_grid(int64_t value, double grid_step)
 {
-    return (double)val * grid_step;
+    return (double)value * grid_step;
 }
 
 template <typename T>
@@ -118,35 +121,35 @@ struct Primitive
     {
         layer_id = layer;
 
-        int n = (int)non_canonical_points.count;
-        int start = get_minimal_point_idx(non_canonical_points);
+        int points_count = (int)non_canonical_points.count;
+        int minimal_point_idx = get_minimal_point_idx(non_canonical_points);
 
         IntVec2 origin = {
-            to_grid(non_canonical_points[start].x, grid_step),
-            to_grid(non_canonical_points[start].y, grid_step)};
+            to_grid(non_canonical_points[minimal_point_idx].x, grid_step),
+            to_grid(non_canonical_points[minimal_point_idx].y, grid_step)};
 
-        for (int i = 0; i < n; ++i)
+        for (int i = 0; i < points_count; i++)
         {
-            int j = (start + i) % n;
-            IntVec2 p = {
+            int j = (minimal_point_idx + i) % points_count;
+            IntVec2 point = {
                 to_grid(non_canonical_points[j].x, grid_step) - origin.x,
                 to_grid(non_canonical_points[j].y, grid_step) - origin.y};
-            canonical_points.push_back(p);
+            canonical_points.push_back(point);
         }
 
         bbox_min = canonical_points[0];
-        for (const IntVec2 &cp : canonical_points)
+        for (const IntVec2 &canonical_point : canonical_points)
         {
-            bbox_min.x = std::min(bbox_min.x, cp.x);
-            bbox_min.y = std::min(bbox_min.y, cp.y);
+            bbox_min.x = std::min(bbox_min.x, canonical_point.x);
+            bbox_min.y = std::min(bbox_min.y, canonical_point.y);
         }
 
         canonical_hash = 0;
         hash_combine(canonical_hash, layer_id);
-        for (const IntVec2 &cp : canonical_points)
+        for (const IntVec2 &canonical_point : canonical_points)
         {
-            hash_combine(canonical_hash, cp.x);
-            hash_combine(canonical_hash, cp.y);
+            hash_combine(canonical_hash, canonical_point.x);
+            hash_combine(canonical_hash, canonical_point.y);
         }
     }
 };
@@ -310,92 +313,75 @@ struct PotentialPattern
     size_t neighbor_idx = 0;
 };
 
-static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> rigister_all_shape_pairs_as_patterns(const GDSContext &gds_context, int64_t win_w, int64_t win_h)
+static size_t find_lower_bound(const GDSContext &gds_context, const vector<size_t> &sorted_indices, size_t right, int64_t x_min)
 {
-    unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> pattern_pairs;
-
-    if (gds_context.shapes.size() < 2)
+    size_t left = 0;
+    while (left < right)
     {
-        return {};
-    }
-
-    for (size_t shape_idx = 0; shape_idx < gds_context.shapes.size() - 1; shape_idx++)
-    {
-        const Shape &shape = gds_context.shapes[shape_idx];
-
-        if (shape.absorbed)
+        size_t mid = (left + right) / 2;
+        if (gds_context.shapes[sorted_indices[mid]].bbox.min_x < x_min)
         {
-            continue;
+            left = mid + 1;
         }
-
-        for (size_t neighbor_idx = shape_idx + 1; neighbor_idx < gds_context.shapes.size(); neighbor_idx++)
+        else
         {
-            const Shape &neighbor = gds_context.shapes[neighbor_idx];
-
-            if (neighbor.absorbed)
-            {
-                continue;
-            }
-
-            const Pattern &pat_shape = gds_context.pattern_registry[shape.pattern_idx];
-            const Pattern &pat_neighbor = gds_context.pattern_registry[neighbor.pattern_idx];
-
-            int64_t anchor_x = shape.bbox.min_x + pat_shape.bbox.min_x;
-            int64_t anchor_y = shape.bbox.min_y + pat_shape.bbox.min_y;
-
-            // Абсолютный bbox shape
-            int64_t shape_max_x = shape.bbox.min_x + pat_shape.bbox.max_x;
-            int64_t shape_max_y = shape.bbox.min_y + pat_shape.bbox.max_y;
-
-            // Абсолютный bbox neighbor
-            int64_t neighbor_min_x = neighbor.bbox.min_x + pat_neighbor.bbox.min_x;
-            int64_t neighbor_min_y = neighbor.bbox.min_y + pat_neighbor.bbox.min_y;
-            int64_t neighbor_max_x = neighbor.bbox.min_x + pat_neighbor.bbox.max_x;
-            int64_t neighbor_max_y = neighbor.bbox.min_y + pat_neighbor.bbox.max_y;
-
-            // Общий bbox пары
-            int64_t pair_min_x = std::min(anchor_x, neighbor_min_x);
-            int64_t pair_min_y = std::min(anchor_y, neighbor_min_y);
-            int64_t pair_max_x = std::max(shape_max_x, neighbor_max_x);
-            int64_t pair_max_y = std::max(shape_max_y, neighbor_max_y);
-
-            // Проверяем что пара помещается в окно
-            if (pair_max_x - pair_min_x > win_w)
-            {
-                continue;
-            }
-            if (pair_max_y - pair_min_y > win_h)
-            {
-                continue;
-            }
-
-            NeighborKey key;
-            key.offset_x = neighbor.bbox.min_x - shape.bbox.min_x;
-            key.offset_y = neighbor.bbox.min_y - shape.bbox.min_y;
-            key.pattern_idx_a = shape.pattern_idx;
-            key.pattern_idx_b = neighbor.pattern_idx;
-
-            PotentialPattern potential_pattern;
-            potential_pattern.shape_idx = shape_idx;
-            potential_pattern.neighbor_idx = neighbor_idx;
-
-            pattern_pairs[key].push_back(potential_pattern);
+            right = mid;
         }
     }
-
-    return pattern_pairs;
+    return left;
 }
 
-static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> register_all_shape_pairs_as_patterns_fast(const GDSContext &ctx, int64_t win_w, int64_t win_h)
+static size_t find_upper_bound(const GDSContext &gds_context, const vector<size_t> &sorted_indices, size_t left, int64_t x_max)
+{
+    size_t right = sorted_indices.size();
+    while (left < right)
+    {
+        size_t mid = (left + right) / 2;
+        if (gds_context.shapes[sorted_indices[mid]].bbox.min_x <= x_max)
+        {
+            left = mid + 1;
+        }
+        else
+        {
+            right = mid;
+        }
+    }
+    return left;
+}
+
+static bool pair_fits_in_window(const Shape &shape, const Pattern &pattern_shape, const Shape &neighbor, const Pattern &pattern_neighbor, int64_t win_w, int64_t win_h)
+{
+    // абсолютный bbox shape
+    int64_t shape_min_x = shape.bbox.min_x + pattern_shape.bbox.min_x;
+    int64_t shape_min_y = shape.bbox.min_y + pattern_shape.bbox.min_y;
+    int64_t shape_max_x = shape.bbox.min_x + pattern_shape.bbox.max_x;
+    int64_t shape_max_y = shape.bbox.min_y + pattern_shape.bbox.max_y;
+
+    // абсолютный bbox neighbor
+    int64_t neighbor_min_x = neighbor.bbox.min_x + pattern_neighbor.bbox.min_x;
+    int64_t neighbor_min_y = neighbor.bbox.min_y + pattern_neighbor.bbox.min_y;
+    int64_t neighbor_max_x = neighbor.bbox.min_x + pattern_neighbor.bbox.max_x;
+    int64_t neighbor_max_y = neighbor.bbox.min_y + pattern_neighbor.bbox.max_y;
+
+    // aбсолютный bbox пары
+    int64_t pair_min_x = std::min(shape_min_x, neighbor_min_x);
+    int64_t pair_min_y = std::min(shape_min_y, neighbor_min_y);
+    int64_t pair_max_x = std::max(shape_max_x, neighbor_max_x);
+    int64_t pair_max_y = std::max(shape_max_y, neighbor_max_y);
+
+    return (pair_max_x - pair_min_x <= win_w) && (pair_max_y - pair_min_y <= win_h);
+}
+
+static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> register_all_shape_pairs_as_patterns(const GDSContext &gds_context, int64_t win_w, int64_t win_h)
 {
     unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> pattern_pairs;
 
-    // Строим отсортированный индекс активных фигур по bbox.min_x
+    // cтроим отсортированный индекс активных фигур по bbox.min_x
     vector<size_t> sorted_indices;
-    sorted_indices.reserve(ctx.shapes.size());
-    for (size_t i = 0; i < ctx.shapes.size(); ++i)
+    sorted_indices.reserve(gds_context.shapes.size());
+    for (size_t i = 0; i < gds_context.shapes.size(); i++)
     {
-        if (!ctx.shapes[i].absorbed)
+        if (!gds_context.shapes[i].absorbed)
         {
             sorted_indices.push_back(i);
         }
@@ -404,103 +390,48 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
     std::sort(sorted_indices.begin(), sorted_indices.end(),
               [&](size_t a, size_t b)
               {
-                  return ctx.shapes[a].bbox.min_x < ctx.shapes[b].bbox.min_x;
+                  return gds_context.shapes[a].bbox.min_x < gds_context.shapes[b].bbox.min_x;
               });
 
-    // Для каждой фигуры ищем соседей в окне по X через бинарный поиск, затем фильтруем по Y
-    for (size_t i = 0; i < sorted_indices.size(); ++i)
+    // для каждой фигуры ищем соседей в окне по x через бинарный поиск, затем по y
+    for (size_t i = 0; i < sorted_indices.size(); i++)
     {
         size_t shape_idx = sorted_indices[i];
-        const Shape &shape = ctx.shapes[shape_idx];
-        const Pattern &pat_shape = ctx.pattern_registry[shape.pattern_idx];
+        const Shape &shape = gds_context.shapes[shape_idx];
+        const Pattern &pattern_shape = gds_context.pattern_registry[shape.pattern_idx];
 
-        int64_t x_min = shape.bbox.min_x;
-        int64_t x_max = shape.bbox.min_x + win_w;
+        size_t lower_bound = find_lower_bound(gds_context, sorted_indices, i, shape.bbox.min_x);
+        size_t upper_bound = find_upper_bound(gds_context, sorted_indices, i + 1, shape.bbox.min_x + win_w);
 
-        // Бинарный поиск: первый элемент с bbox.min_x >= x_min
-        // (все элементы до i уже имеют меньший или равный x, но нам нужны и те что слева от shape в пределах окна)
-        size_t lo = 0, hi = 0;
-        {
-            size_t left = 0, right = i;
-            while (left < right)
-            {
-                size_t mid = (left + right) / 2;
-                if (ctx.shapes[sorted_indices[mid]].bbox.min_x < x_min)
-                {
-                    left = mid + 1;
-                }
-                else
-                {
-                    right = mid;
-                }
-            }
-            lo = left;
-        }
-        // Верхняя граница по X
-        {
-            size_t left = i + 1, right = sorted_indices.size();
-            while (left < right)
-            {
-                size_t mid = (left + right) / 2;
-                if (ctx.shapes[sorted_indices[mid]].bbox.min_x <= x_max)
-                {
-                    left = mid + 1;
-                }
-                else
-                {
-                    right = mid;
-                }
-            }
-            hi = left;
-        }
-
-        for (size_t j = lo; j < hi; ++j)
+        for (size_t j = lower_bound; j < upper_bound; j++)
         {
             size_t neighbor_idx = sorted_indices[j];
+            if (gds_context.shapes[neighbor_idx].absorbed)
+            {
+                continue;
+            }
+
             if (neighbor_idx == shape_idx)
             {
                 continue;
             }
-            if (ctx.shapes[neighbor_idx].absorbed)
-            {
-                continue;
-            }
-            const Shape &neighbor = ctx.shapes[neighbor_idx];
-            const Pattern &pat_neighbor = ctx.pattern_registry[neighbor.pattern_idx];
 
-            // Фильтр по Y
+            const Shape &neighbor = gds_context.shapes[neighbor_idx];
+            const Pattern &pattern_neighbor = gds_context.pattern_registry[neighbor.pattern_idx];
+
+            // фильтруем y
             int64_t dy = std::abs(neighbor.bbox.min_y - shape.bbox.min_y);
             if (dy > win_h)
             {
                 continue;
             }
 
-            // Проверка что пара целиком в окне
-            int64_t anchor_x = shape.bbox.min_x + pat_shape.bbox.min_x;
-            int64_t anchor_y = shape.bbox.min_y + pat_shape.bbox.min_y;
-            int64_t shape_max_x = shape.bbox.min_x + pat_shape.bbox.max_x;
-            int64_t shape_max_y = shape.bbox.min_y + pat_shape.bbox.max_y;
-
-            int64_t nbr_min_x = neighbor.bbox.min_x + pat_neighbor.bbox.min_x;
-            int64_t nbr_min_y = neighbor.bbox.min_y + pat_neighbor.bbox.min_y;
-            int64_t nbr_max_x = neighbor.bbox.min_x + pat_neighbor.bbox.max_x;
-            int64_t nbr_max_y = neighbor.bbox.min_y + pat_neighbor.bbox.max_y;
-
-            int64_t pair_min_x = std::min(anchor_x, nbr_min_x);
-            int64_t pair_min_y = std::min(anchor_y, nbr_min_y);
-            int64_t pair_max_x = std::max(shape_max_x, nbr_max_x);
-            int64_t pair_max_y = std::max(shape_max_y, nbr_max_y);
-
-            if (pair_max_x - pair_min_x > win_w)
-            {
-                continue;
-            }
-            if (pair_max_y - pair_min_y > win_h)
+            if (!pair_fits_in_window(shape, pattern_shape, neighbor, pattern_neighbor, win_w, win_h))
             {
                 continue;
             }
 
-            // Избегаем дублирования пары (i,j) и (j,i). берем только j > i по позиции в sorted_indices
+            // избегаем дублирования пары (i, j) и (j, i)
             if (neighbor_idx < shape_idx && j < i)
             {
                 continue;
@@ -521,7 +452,7 @@ static unordered_map<NeighborKey, vector<PotentialPattern>, NeighborKeyHash> reg
 
 static bool expand_patterns_once(GDSContext &gds_context, int64_t win_w, int64_t win_h)
 {
-    auto pattern_pairs = register_all_shape_pairs_as_patterns_fast(gds_context, win_w, win_h);
+    auto pattern_pairs = register_all_shape_pairs_as_patterns(gds_context, win_w, win_h);
 
     auto max_it = std::max_element(
         pattern_pairs.begin(),
@@ -587,13 +518,13 @@ static bool expand_patterns_once(GDSContext &gds_context, int64_t win_w, int64_t
     return true;
 }
 
-static void collect_primitives(const GDSContext &ctx, size_t pattern_idx, IntVec2 offset, vector<std::pair<IntVec2, size_t>> &result)
+static void collect_primitives(const GDSContext &gds_context, size_t pattern_idx, IntVec2 offset, vector<std::pair<IntVec2, size_t>> &result)
 {
-    const Pattern &pattern = ctx.pattern_registry[pattern_idx];
+    const Pattern &pattern = gds_context.pattern_registry[pattern_idx];
 
     if (pattern.is_leaf)
     {
-        // pattern_elements[0].pattern_idx здесь — это primitive_idx
+        // pattern_elements[0].pattern_idx - это primitive_idx
         const Pattern::PatternElement &pe = pattern.pattern_elements[0];
         result.push_back({{offset.x + pe.position_in_pattern.x, offset.y + pe.position_in_pattern.y}, pe.pattern_idx});
         return;
@@ -601,11 +532,11 @@ static void collect_primitives(const GDSContext &ctx, size_t pattern_idx, IntVec
 
     for (const Pattern::PatternElement &pe : pattern.pattern_elements)
     {
-        collect_primitives(ctx, pe.pattern_idx, {offset.x + pe.position_in_pattern.x, offset.y + pe.position_in_pattern.y}, result);
+        collect_primitives(gds_context, pe.pattern_idx, {offset.x + pe.position_in_pattern.x, offset.y + pe.position_in_pattern.y}, result);
     }
 }
 
-static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir)
+static void save_patterns_to_gds(const GDSContext &gds_context, const string &output_dir)
 {
     fs::create_directories(output_dir);
 
@@ -621,9 +552,9 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
     }
 
     unordered_map<size_t, vector<size_t>> pattern_to_shapes;
-    for (size_t si = 0; si < ctx.shapes.size(); si++)
+    for (size_t si = 0; si < gds_context.shapes.size(); si++)
     {
-        const Shape &s = ctx.shapes[si];
+        const Shape &s = gds_context.shapes[si];
         if (s.absorbed)
         {
             continue;
@@ -635,7 +566,7 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
     int file_idx = 1;
     for (const auto &[pid, shape_indices] : pattern_to_shapes)
     {
-        bool is_leaf = ctx.pattern_registry[pid].is_leaf;
+        bool is_leaf = gds_context.pattern_registry[pid].is_leaf;
         string base_dir = is_leaf ? primitives_dir : output_dir;
         string prefix = is_leaf ? "primitive_" : "pattern_";
 
@@ -645,35 +576,35 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         gdstk::Cell *cell = (gdstk::Cell *)calloc(1, sizeof(gdstk::Cell));
         cell->init("pattern");
 
-        // Раскрываем паттерн — получаем примитивы с offset от (0,0) паттерна
+        // раскрываем паттерн - получаем примитивы с offset от (0, 0) паттерна
         vector<std::pair<IntVec2, size_t>> primitives;
-        collect_primitives(ctx, pid, {0, 0}, primitives);
+        collect_primitives(gds_context, pid, {0, 0}, primitives);
 
         const IntVec2 anchor_pos = {
-            ctx.shapes[shape_indices[0]].bbox.min_x,
-            ctx.shapes[shape_indices[0]].bbox.min_y};
+            gds_context.shapes[shape_indices[0]].bbox.min_x,
+            gds_context.shapes[shape_indices[0]].bbox.min_y};
 
-        for (const auto &[rel_pos, prim_idx] : primitives)
+        for (const auto &[rel_pos, primitive_idx] : primitives)
         {
-            const Primitive &prim = ctx.primitive_registry[prim_idx];
+            const Primitive &primitive = gds_context.primitive_registry[primitive_idx];
 
-            // bbox примитива начинается в (0,0) после канонизации, но position_on_canvas может отличаться от bbox.min. Нужно найти bbox.min примитива в его локальных координатах.
-            int64_t prim_bbox_min_x = prim.canonical_points[0].x;
-            int64_t prim_bbox_min_y = prim.canonical_points[0].y;
-            for (const IntVec2 &cp : prim.canonical_points)
+            // bbox примитива начинается в (0, 0) после канонизации, но position_on_canvas может отличаться от bbox.min. нужно найти bbox.min примитива в его локальных координатах
+            int64_t primitive_bbox_min_x = primitive.canonical_points[0].x;
+            int64_t primitive_bbox_min_y = primitive.canonical_points[0].y;
+            for (const IntVec2 &canonical_point : primitive.canonical_points)
             {
-                prim_bbox_min_x = std::min(prim_bbox_min_x, cp.x);
-                prim_bbox_min_y = std::min(prim_bbox_min_y, cp.y);
+                primitive_bbox_min_x = std::min(primitive_bbox_min_x, canonical_point.x);
+                primitive_bbox_min_y = std::min(primitive_bbox_min_y, canonical_point.y);
             }
 
             gdstk::Polygon *poly = new gdstk::Polygon{};
-            poly->tag = gdstk::make_tag((uint32_t)prim.layer_id, 0);
+            poly->tag = gdstk::make_tag((uint32_t)primitive.layer_id, 0);
 
-            for (const IntVec2 &cp : prim.canonical_points)
+            for (const IntVec2 &canonical_point : primitive.canonical_points)
             {
                 gdstk::Vec2 abs = {
-                    from_grid(anchor_pos.x + rel_pos.x + cp.x - prim.bbox_min.x, ctx.grid_step),
-                    from_grid(anchor_pos.y + rel_pos.y + cp.y - prim.bbox_min.y, ctx.grid_step)};
+                    from_grid(anchor_pos.x + rel_pos.x + canonical_point.x - primitive.bbox_min.x, gds_context.grid_step),
+                    from_grid(anchor_pos.y + rel_pos.y + canonical_point.y - primitive.bbox_min.y, gds_context.grid_step)};
                 poly->point_array.append(abs);
             }
 
@@ -687,11 +618,11 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         lib.free_all();
 
         txt << fname << " <-> ";
-        for (size_t i = 0; i < shape_indices.size(); ++i)
+        for (size_t i = 0; i < shape_indices.size(); i++)
         {
-            const Shape &s = ctx.shapes[shape_indices[i]];
-            double lx = from_grid(s.bbox.min_x, ctx.grid_step);
-            double ly = from_grid(s.bbox.min_y, ctx.grid_step);
+            const Shape &s = gds_context.shapes[shape_indices[i]];
+            double lx = from_grid(s.bbox.min_x, gds_context.grid_step);
+            double ly = from_grid(s.bbox.min_y, gds_context.grid_step);
             txt << "(" << lx << "," << ly << ")";
             if (i + 1 < shape_indices.size())
             {
@@ -703,7 +634,7 @@ static void save_patterns_to_gds(const GDSContext &ctx, const string &output_dir
         file_idx++;
     }
 
-    cout << "[save] placements written to " << txt_path << "\n";
+    cout << "[save] placements saved to " << txt_path << "\n";
 }
 
 static GDSContext read_gds_file(const string &filepath)
@@ -716,38 +647,38 @@ static GDSContext read_gds_file(const string &filepath)
 
     gds_context.grid_step = file_precision / file_unit;
 
-    cout << "[read_gds] unit=" << file_unit << "  precision=" << file_precision << "  grid_step=" << gds_context.grid_step << "\n";
+    cout << "[read_gds] unit=" << file_unit << ", precision=" << file_precision << ", grid_step=" << gds_context.grid_step << "\n";
 
     gdstk::ErrorCode err = gdstk::ErrorCode::NoError;
     gdstk::Library lib = gdstk::read_gds(filepath.c_str(), 0, 0, nullptr, &err);
 
     if (err != gdstk::ErrorCode::NoError)
     {
-        cerr << "[read_gds] error reading file: " << filepath << "\n";
+        cerr << "[read_gds] error reading file: " << filepath << ", proceed with caution\n";
     }
 
     gdstk::Array<gdstk::Cell *> top_cells = {};
     gdstk::Array<gdstk::RawCell *> top_rawcells = {};
     lib.top_level(top_cells, top_rawcells);
 
-    for (uint64_t ci = 0; ci < top_cells.count; ++ci)
+    for (uint64_t ci = 0; ci < top_cells.count; ci++)
     {
         gdstk::Cell *cell = top_cells[ci];
 
         gdstk::Array<gdstk::Polygon *> flat_polys = {};
         cell->get_polygons(true, true, -1, false, 0, flat_polys);
 
-        for (uint64_t pi = 0; pi < flat_polys.count; ++pi)
+        for (uint64_t pi = 0; pi < flat_polys.count; pi++)
         {
             gdstk::Polygon *polygon = flat_polys[pi];
 
             uint32_t layer = gdstk::get_layer(polygon->tag);
 
-            // Primitive конвертирует double → int64_t через grid_step внутри
+            // Primitive конвертирует double -> int64_t через grid_step внутри
             Primitive primitive(polygon->point_array, layer, gds_context.grid_step);
             size_t primitive_idx = gds_context.primitive_registry.get_or_insert(primitive.canonical_hash, primitive);
 
-            // Начальный Pattern из одного примитива
+            // начальный Pattern из одного примитива
             Pattern pattern;
             pattern.is_leaf = true;
             pattern.bbox.min_x = primitive.bbox_min.x;
@@ -755,17 +686,17 @@ static GDSContext read_gds_file(const string &filepath)
 
             int64_t max_x = primitive.canonical_points[0].x;
             int64_t max_y = primitive.canonical_points[0].y;
-            for (const IntVec2 &cp : primitive.canonical_points)
+            for (const IntVec2 &canonical_point : primitive.canonical_points)
             {
-                max_x = std::max(max_x, cp.x);
-                max_y = std::max(max_y, cp.y);
+                max_x = std::max(max_x, canonical_point.x);
+                max_y = std::max(max_y, canonical_point.y);
             }
             pattern.bbox.max_x = max_x;
             pattern.bbox.max_y = max_y;
 
             Pattern::PatternElement pattern_element;
             pattern_element.position_in_pattern = {0, 0};
-            pattern_element.pattern_idx = primitive_idx; // добавляем примитив, потому что только 1 pattern_element
+            pattern_element.pattern_idx = primitive_idx; // добавляем паттерн как примитив, потому что только 1 pattern_element
             pattern.pattern_elements.push_back(pattern_element);
             pattern.canonical_hash = compute_pattern_hash(pattern);
 
@@ -797,53 +728,154 @@ static GDSContext read_gds_file(const string &filepath)
     lib.free_all();
 
     cout << "[read_gds] shapes: " << gds_context.shapes.size()
-         << "  primitives: " << gds_context.primitive_registry.size()
-         << "  initial patterns: " << gds_context.pattern_registry.size() << "\n";
+         << " primitives: " << gds_context.primitive_registry.size()
+         << " initial patterns: " << gds_context.pattern_registry.size() << "\n";
 
     return gds_context;
+}
+
+static void save_pattern_stats(const GDSContext &gds_context, const string &output_dir)
+{
+    struct PatternStat
+    {
+        int pattern_idx;
+        int element_count;
+        int usage_count;
+    };
+
+    unordered_map<int, int> usage_map;
+    for (auto &shape : gds_context.shapes)
+    {
+        if (!shape.absorbed)
+        {
+            usage_map[shape.pattern_idx]++;
+        }
+    }
+
+    vector<PatternStat> stats;
+    for (int i = 0; i < gds_context.pattern_registry.size(); i++)
+    {
+        int usage = usage_map.count(i) ? usage_map[i] : 0;
+        if (usage == 0)
+        {
+            continue;
+        }
+        stats.push_back({i, static_cast<int>(gds_context.pattern_registry[i].pattern_elements.size()), usage});
+    }
+
+    sort(stats.begin(), stats.end(),
+         [](const PatternStat &a, const PatternStat &b)
+         {
+             if (a.element_count != b.element_count)
+             {
+                 return a.element_count > b.element_count;
+             }
+             return a.usage_count > b.usage_count;
+         });
+
+    int w_pattern_idx = string("pattern_idx").size();
+    int w_element = string("elements").size();
+    int w_usages = string("usages").size();
+
+    for (auto &stat : stats)
+    {
+        w_pattern_idx = std::max(w_pattern_idx, (int)std::to_string(stat.pattern_idx).size());
+        w_element = std::max(w_element, (int)std::to_string(stat.element_count).size());
+        w_usages = std::max(w_usages, (int)std::to_string(stat.usage_count).size());
+    }
+
+    auto pad = [](const string &s, int w)
+    {
+        return s + string(w - s.size(), ' ');
+    };
+
+    string filepath = output_dir + "/pattern_stats.txt";
+    std::ofstream file(filepath);
+    if (!file.is_open())
+    {
+        cerr << "Failed to open: " << filepath << endl;
+        return;
+    }
+
+    file << pad("pattern_idx", w_pattern_idx) << " | " << pad("elements", w_element) << " | " << pad("usages", w_usages) << "\n";
+    file << string(w_pattern_idx, '-') << "-+-" << string(w_element, '-') << "-+-" << string(w_usages, '-') << "\n";
+
+    for (auto &stat : stats)
+    {
+        file << pad(std::to_string(stat.pattern_idx), w_pattern_idx) << " | "
+             << pad(std::to_string(stat.element_count), w_element) << " | "
+             << pad(std::to_string(stat.usage_count), w_usages) << "\n";
+    }
+
+    int complex_usages = 0;
+    int total_shapes = 0;
+    for (auto &shape : gds_context.shapes)
+    {
+        if (shape.absorbed)
+        {
+            continue;
+        }
+
+        total_shapes++;
+        if (gds_context.pattern_registry[shape.pattern_idx].pattern_elements.size() > 1)
+        {
+            complex_usages++;
+        }
+    }
+
+    file << "\n";
+    file << "complex / total: " << complex_usages << " / " << total_shapes;
+    if (total_shapes > 0)
+    {
+        file << " (" << (100.0 * complex_usages / total_shapes) << "%)\n";
+    }
+
+    cout << "[save] pattern stats saved to " << filepath << "\n";
+
+    file.close();
 }
 
 int main()
 {
     Config config;
 
-    cout << "Input GDS file: ";
+    cout << "Input absolute path to a GDS file: ";
     std::getline(std::cin, config.input_file);
 
     cout << "Output directory [./output_patterns]: ";
-    std::string out;
-    std::getline(std::cin, out);
-    if (!out.empty())
+    std::string output_dir;
+    std::getline(std::cin, output_dir);
+    if (!output_dir.empty())
     {
-        config.output_dir = out;
+        config.pattern_output_dir = output_dir;
     }
 
-    cout << "Window width in um [5.0]: ";
-    std::string w;
-    std::getline(std::cin, w);
-    if (!w.empty())
+    cout << "Search window width in um [5.0]: ";
+    std::string width;
+    std::getline(std::cin, width);
+    if (!width.empty())
     {
-        config.win_w_um = std::stod(w);
+        config.win_w_um = std::stod(width);
     }
 
-    cout << "Window height in um [5.0]: ";
-    std::string h;
-    std::getline(std::cin, h);
-    if (!h.empty())
+    cout << "Search window height in um [5.0]: ";
+    std::string height;
+    std::getline(std::cin, height);
+    if (!height.empty())
     {
-        config.win_h_um = std::stod(h);
+        config.win_h_um = std::stod(height);
     }
 
-    cout << "Max iterations [100]: ";
-    std::string n;
-    std::getline(std::cin, n);
-    if (!n.empty())
+    cout << "Max search iterations [100]: ";
+    std::string max_iterations;
+    std::getline(std::cin, max_iterations);
+    if (!max_iterations.empty())
     {
-        config.max_iter = std::stoi(n);
+        config.max_iter = std::stoi(max_iterations);
     }
 
     cout << "\n[config] input:   " << config.input_file << "\n"
-         << "[config] output:  " << config.output_dir << "\n"
+         << "[config] output:  " << config.pattern_output_dir << "\n"
          << "[config] win_w:   " << config.win_w_um << " um\n"
          << "[config] win_h:   " << config.win_h_um << " um\n"
          << "[config] max_iter:" << config.max_iter << "\n";
@@ -871,6 +903,7 @@ int main()
         }
     }
 
-    save_patterns_to_gds(gds_context, config.output_dir);
+    save_patterns_to_gds(gds_context, config.pattern_output_dir);
+    save_pattern_stats(gds_context, config.pattern_output_dir);
     return 0;
 }
