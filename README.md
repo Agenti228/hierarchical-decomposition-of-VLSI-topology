@@ -28,22 +28,22 @@ C++ проект для иерархической декомпозиции то
 После запуска программа запросит параметры в интерактивном режиме:
 
 ```
-Input GDS file: C:\<путь_к_файлу>\<название_файла>.gds
+Input absolute path to a GDS file: C:\<путь_к_файлу>\<название_файла>.gds
 Output directory [./output_patterns]: C:\<путь_к_выходной_папке>\output
-Window width in um [5.0]: 6.5
-Window height in um [5.0]: 3.0
-Max iterations [100]: 200
+Search window width in um [5.0]: 6.5
+Search window height in um [5.0]: 3.0
+Max search iterations [100]: 200
 ```
 
 | Параметр | Описание | Пример |
 |---|---|---|
-| Input GDS file | Абсолютный путь к входному GDSII файлу | `C:\data\topology.gds` |
+| Input absolute path to a GDS file | Абсолютный путь к входному GDSII файлу | `C:\data\topology.gds` |
 | Output directory | Папка для выходных файлов (создаётся автоматически) | `C:\data\output` |
-| Window width in um | Ширина окна поиска паттернов в микронах | `3.0` |
-| Window height in um | Высота окна поиска паттернов в микронах | `8.0` |
-| Max iterations | Максимальное число итераций расширения паттернов | `50` |
+| Search window width in um | Ширина окна поиска паттернов в микронах | `3.0` |
+| Search window height in um | Высота окна поиска паттернов в микронах | `8.0` |
+| Max search iterations | Максимальное число итераций расширения паттернов | `50` |
 
-Если нажать Enter (без ввода), будет использовано значение по умолчанию (указано в квадратных скобках).
+Если нажать Enter (без ввода), будет использовано значение, указанное в квадратных скобках.
 
 ---
 
@@ -62,6 +62,7 @@ output_patterns/
   pattern_2.gds      <- геометрия второго паттерна
   ...
   pattern_N.gds
+  pattern_stats.txt  <- статистика поиска паттренов 
   patterns.txt       <- координаты размещений
 ```
 
